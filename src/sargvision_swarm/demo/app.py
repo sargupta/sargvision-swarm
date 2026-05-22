@@ -1,27 +1,84 @@
-"""Gradio Sandbox v2 — comms-first.
+"""Gradio Sandbox v3 — LIVE WATCH tab as primary view.
 
-Tabs:
-1. Swarm    — 3D positions + comm-range topology side-by-side
-2. Wire log — live A2A / Zenoh / MAVLink / BFT / gRPC message stream
-3. Decisions — per-drone intents + SwarmRaft BFT votes + ED-CBBA bids
-4. Protocols — A2A / MCP / MAVLink / Zenoh / Brooks-subsumption explainer
-5. Challenges — what others have hit + how this design mitigates
+Streaming generator pushes one rendered frame per swarm tick. You watch the
+drones move + messages flash + decisions fire in real time.
 """
 
 from __future__ import annotations
 
 import time
 
+from sargvision_swarm.demo.live_session import LiveSession
 from sargvision_swarm.demo.runner import RolloutResult, rollout
 from sargvision_swarm.viz import (
     bandwidth_figure,
     protocol_breakdown_pie,
+    render_frame,
     swarm_to_plotly_figure,
+    to_numpy,
     topology_figure,
 )
 
 
-# ── Helpers ─────────────────────────────────────────────────────────────
+# ── Live-tab generator ────────────────────────────────────────────────
+
+
+def _live_generator(n_drones, scenario, steps, comm_range, seed, fps):
+    """Yield (image, event_log, status) tuples each tick."""
+    session = LiveSession(
+        n_drones=int(n_drones),
+        scenario=scenario,
+        seed=int(seed),
+        comm_range_m=float(comm_range),
+    )
+    target_dt = 1.0 / max(1.0, float(fps))
+    started = time.time()
+
+    # First frame so the UI shows something immediately
+    img = render_frame(
+        swarm=session.swarm,
+        trails=session.trails,
+        recent_msgs=session.recent_for_render(),
+        floating_events=session.floating_for_render(),
+        comm_adjacency=session.comm_adjacency(),
+        intents=session.intents,
+        stats=session.render_stats(),
+    )
+    yield to_numpy(img), "Starting…\n", "starting"
+
+    last_yield = time.time()
+    for _ in range(int(steps)):
+        session.step()
+        # throttle to fps
+        now = time.time()
+        sleep_for = max(0.0, target_dt - (now - last_yield))
+        if sleep_for:
+            time.sleep(sleep_for)
+
+        stats = session.render_stats()
+        img = render_frame(
+            swarm=session.swarm,
+            trails=session.trails,
+            recent_msgs=session.recent_for_render(),
+            floating_events=session.floating_for_render(),
+            comm_adjacency=session.comm_adjacency(),
+            intents=session.intents,
+            stats=stats,
+            bft_flash_voters=set() if not session.bft_flash else session.bft_flash,
+            cbba_flash_cells=session.cbba_flash or None,
+        )
+        log_text = "\n".join(list(session.event_log)[-25:][::-1])
+        elapsed = time.time() - started
+        status = (
+            f"step {session.step_i}/{int(steps)} · t={stats['t']:.2f}s · "
+            f"msgs={stats['total_msgs']} ({stats['msgs_per_s']:.0f}/s) · "
+            f"wall={elapsed:.1f}s"
+        )
+        yield to_numpy(img), log_text, status
+        last_yield = time.time()
+
+
+# ── Static-rollout helpers (other tabs) ───────────────────────────────
 
 
 def _swarm_at(result: RolloutResult, idx: int):
@@ -30,8 +87,7 @@ def _swarm_at(result: RolloutResult, idx: int):
 
 def _3d_figure(result: RolloutResult, idx: int, scenario: str):
     s = _swarm_at(result, idx)
-    title = f"3D · {scenario} · N={s.n} · t={s.t:.1f}s"
-    return swarm_to_plotly_figure(s, title=title)
+    return swarm_to_plotly_figure(s, title=f"3D · {scenario} · N={s.n} · t={s.t:.1f}s")
 
 
 def _topo_figure(result: RolloutResult, idx: int):
@@ -39,7 +95,7 @@ def _topo_figure(result: RolloutResult, idx: int):
     return topology_figure(s, result.comm_model, title="Comm topology")
 
 
-def _message_table(result: RolloutResult, max_rows: int = 200, proto_filter: str = "ALL"):
+def _message_table(result, max_rows=200, proto_filter="ALL"):
     rows = result.message_log.recent(k=max_rows * 2)
     if proto_filter != "ALL":
         rows = [m for m in rows if m.protocol.value == proto_filter]
@@ -58,9 +114,9 @@ def _message_table(result: RolloutResult, max_rows: int = 200, proto_filter: str
     ]
 
 
-def _payload_summary(m) -> str:
+def _payload_summary(m):
     p = m.payload
-    if "method" in p:                # A2A
+    if "method" in p:
         return f"method={p['method']} params={p.get('params', {})}"
     if "intent" in p:
         return f"intent={p['intent']}"
@@ -76,25 +132,21 @@ def _payload_summary(m) -> str:
     return str(p)[:80]
 
 
-def _intents_table(result: RolloutResult):
+def _intents_table(result):
     return [[did, intent] for did, intent in sorted(result.intents_by_drone.items())]
 
 
-def _bft_table(result: RolloutResult):
+def _bft_table(result):
     return [
         [
-            ev["t"],
-            ev["proposal"],
-            "PASS" if ev["passed"] else "FAIL",
-            ev.get("yes", 0),
-            ev.get("no", 0),
-            str(ev.get("byzantine", [])),
+            ev["t"], ev["proposal"], "PASS" if ev["passed"] else "FAIL",
+            ev.get("yes", 0), ev.get("no", 0), str(ev.get("byzantine", [])),
         ]
         for ev in result.bft_events
     ]
 
 
-def _cbba_table(result: RolloutResult):
+def _cbba_table(result):
     rows = []
     for ev in result.cbba_events[-30:]:
         for task, drone in ev["assignment"].items():
@@ -102,140 +154,60 @@ def _cbba_table(result: RolloutResult):
     return rows
 
 
-# ── Tab content (markdown) ─────────────────────────────────────────────
+# ── Markdown blocks ───────────────────────────────────────────────────
+
+
+WATCH_INTRO_MD = """
+## 🎬 Live Watch — drones engaging in real time
+
+Hit **Play** below. You'll see:
+
+- **Drones** as colored circles (worker · scout · relay · leader).
+- **Trails** behind each drone showing recent motion.
+- **Comm-range edges** (faint green) — who can hear whom right now.
+- **Message arrows** flashing across links — color-keyed by protocol (purple = A2A, blue = Zenoh pose, green = MAVLink heartbeat, orange = gRPC cognition, red = BFT vote).
+- **HOLD / ADV / YLD / ROT** labels under each drone = LLM-emitted intent.
+- **BFT flash** — yellow halo on the 7 committee members when they vote.
+- **CBBA cells** — gold squares painted on the map when a drone claims a task.
+- **Event ticker** scrolls every yield negotiation, every BFT result, every CBBA claim.
+
+This is the **same engine** that powers the static tabs — same Brooks-subsumption,
+same A2A / Zenoh / MAVLink / BFT / gRPC traffic. The only difference is you watch
+it happen one tick at a time.
+"""
 
 
 PROTOCOLS_MD = """
 # Protocols on the swarm wire
 
-Real deployment uses **five protocols**, layered:
+| Layer | Protocol | What it carries |
+|---|---|---|
+| Cognition (LLM ↔ LLM) | **gRPC** | Per-drone intent → ground orchestrator |
+| Agent ↔ agent | **A2A** | JSON-RPC 2.0 over HTTP+SSE (Google / Linux Foundation, Apr 2025, Apache-2.0) |
+| Agent ↔ tool | **MCP** | per-agent tool access |
+| Robotics middleware | **Zenoh / DDS** | pose gossip + ED-CBBA bids |
+| Autopilot bus | **MAVLink v2 signed** | heartbeat + telem |
+| Mission state | **BFT** | SwarmRaft K=7 quorum votes |
 
-| Layer | Protocol | What it carries | Wire format |
-|---|---|---|---|
-| Cognition (LLM ↔ LLM) | **gRPC** | Per-drone intent → ground orchestrator | protobuf over HTTP/2 |
-| Agent ↔ agent | **A2A** (Agent2Agent) | Capability discovery + intent share + yield negotiation | **JSON-RPC 2.0 over HTTP+SSE** |
-| Agent ↔ tool | **MCP** (Model Context Protocol) | Per-agent tool access (camera, IMU, GPS) | JSON-RPC over stdio / HTTP |
-| Robotics middleware | **Zenoh** (or DDS) | Pose, intent gossip, ED-CBBA bids, BFT votes | binary, gossip-based |
-| Autopilot bus | **MAVLink v2** (signed) | Heartbeat, position telem, command | binary, signed |
-
-## A2A (the one you asked about)
-
-Google open standard, announced **April 2025**, governed by Linux Foundation, Apache-2.0.
-
-- **Transport:** HTTPS + SSE (server-sent events for streaming)
-- **Envelope:** JSON-RPC 2.0
-- **Discovery:** "Agent Cards" advertise capabilities + transports
-- **Patterns:** synchronous request/response, streaming (SSE), async push notifications
-- **Complements MCP:** A2A is agent-to-agent; MCP is agent-to-tool
-
-In **this demo**: `agents/peer_dialogue.py` emits `A2AMessage` envelopes (proper JSON-RPC 2.0 shape) over the in-memory bus. Drop-in a real A2A SDK on Linux and the methods (`share.intent`, `negotiate.yield`, `claim.task`, `share.health`) keep their signatures.
-
-## Why we publish positions only (not velocities)
-
-Velocity leaks intent and doubles bandwidth. BVC needs only positions to compute collision-safe cells. Standard discipline in swarm robotics.
-
-## SwarmRaft (BFT mission state)
-
-A K=7 committee replicates mission state. Tolerates ⌊(K-1)/2⌋ = **3 Byzantine drones** (incl. GNSS-spoofed). Irreversible actions (engage, RTL, abort) require **⅔ quorum**.
-
-## ED-CBBA (event-driven task allocation)
-
-Vanilla CBBA re-bids every cycle → radio chatter explodes at 50+ drones.
-**ED-CBBA** re-bids only when a neighbor's known winning bid changes. **~52% less traffic** (arXiv 2509.06481).
-
-## Brooks subsumption discipline
-
-LLM emits **slow-loop intent**. Reflex layer (Boids / Olfati-Saber / BVC) closes the **fast control loop**. No LLM call ever blocks an actuator command. Mandatory because cloud LLM RTT is 50-500 ms and collision avoidance must be < 200 ms.
-
-## Sources
-
-- [A2A specification](https://a2a-protocol.org/latest/specification/)
-- [A2A GitHub](https://github.com/a2aproject/A2A)
-- [Google announcement](https://developers.googleblog.com/en/a2a-a-new-era-of-agent-interoperability/)
-- [Anthropic MCP](https://modelcontextprotocol.io/)
-- [PX4 v1.17 in-tree Zenoh](https://docs.px4.io/main/en/middleware/zenoh.html)
-- [ED-CBBA paper](https://arxiv.org/abs/2509.06481)
-- See also `~/Documents/AI_Workspace/drone_swarm_research/04_comms.md`.
+See `docs/PROTOCOLS.md` for full spec recap.
 """
 
 
 CHALLENGES_MD = """
-# What others hit in the field — and how this design mitigates
+# Real-world swarm-comm challenges → mitigations in this design
 
-## 1. Latency >120 ms in complex environments
+- **>120 ms latency** → collision avoidance runs on-drone, never cloud.
+- **Bandwidth saturation** → semantic + key-frame uplink (2-10 Mbps/drone), not raw HD.
+- **DDS multicast storms** → Zenoh gossip discovery scales 100+ on Wi-Fi.
+- **GNSS spoofing** → SwarmRaft K=7 BFT, ⅔ quorum on irreversible.
+- **GPS-denied drift** → Swarm-SLAM + UWB; Vásárhelyi tuning is relative.
+- **India regs** → 865-867 MHz LoRa only, DGFT 2022 ban on imported CBU.
 
-Field tests of UAV swarms in cluttered terrain regularly see end-to-end latency exceeding 120 ms — enough to break collision-avoidance loops if those loops route through the cloud.
-
-**Mitigation in this design:**
-- Collision (BVC + GCBF+) runs **on-drone**, no network dependency.
-- LLM intent runs at slow cadence (1-5 Hz) — never on the fast loop.
-- See Brooks-subsumption discipline.
-
-## 2. Bandwidth saturation
-
-At 50 drones streaming 1080p video = ~25 Gbps aggregate. Infeasible without 5G slice + dedicated radios.
-
-**Mitigation:**
-- Drones stream **2-10 Mbps of semantic + key-frame**, never raw HD.
-- Pose broadcasts at 10 Hz = ~32 B/msg = 320 B/s per drone = 32 kB/s for 100 drones — trivial.
-- ED-CBBA cuts task-bidding chatter ~52%.
-- This demo's bandwidth panel shows live bytes/sec per protocol.
-
-## 3. Multicast storms (DDS on Wi-Fi)
-
-ROS 2 default Fast/Cyclone DDS uses multicast discovery; collapses at ~20 nodes on Wi-Fi.
-
-**Mitigation:** **Zenoh + rmw_zenoh** uses gossip discovery — scales to 100+ on lossy mesh. MDPI 2025 50-UAV paper validated. PX4 v1.17 ships Zenoh in-tree.
-
-## 4. Authentication + key handover
-
-Without per-drone identity, a swarm is one captured drone away from total compromise.
-
-**Mitigation (planned for Phase 2):**
-- Per-drone X.509 cert from CoE PKI.
-- MAVLink v2 signed messages.
-- A2A Agent Cards carry cryptographic identity.
-- (arXiv 2201.05657 covers the threat model.)
-
-## 5. GPS-denied: 2-5 cm/min positioning drift
-
-In urban canyon / indoor / jamming scenarios, accumulated VIO drift compounds. Coordination decisions become meaningless after ~5 minutes.
-
-**Mitigation:**
-- **Swarm-SLAM (MIT)** for collaborative loop closure across the squad.
-- **UWB (NoopLoop / Decawave)** for relative pose between drones.
-- Vásárhelyi 2018 tuning works on relative spacing, not absolute coords.
-
-## 6. Byzantine fault / GNSS spoofing
-
-A spoofed drone votes wrong. Without BFT, single bad actor corrupts the swarm.
-
-**Mitigation:** **SwarmRaft K=7 BFT committee**, ⅔ quorum on irreversible decisions. Tolerates 3 Byzantine drones in a 7-member committee. (Demo runs an ED-CBBA-class spoof test at step 100.)
-
-## 7. India regulatory traps
-
-- DGFT 2022: drones in CBU/CKD form **prohibited** to import. Components free. **Must build in India.**
-- NPNT mandatory for sales post Jan 2024.
-- WPC bands: 2.4 / 5.8 GHz + **865-867 MHz LoRa only**. **NOT 868 / 915 MHz** — both licensed.
-- WPC ETA per radio SKU mandatory.
-
-## 8. Sim2real cliff
-
-End-to-end MARL policies trained in Isaac Sim fail outdoors at scale. **No published 100-drone outdoor neural deployment exists in 2026.**
-
-**Mitigation:** Hybrid stack — classical reflex + RL **sub-task** policies + LLM cognition. AttentionSwarm (Mar 2025) is the SOTA indoor benchmark; outdoor frontier is ~10 drones with learned coordination.
-
-## Sources / further reading
-
-- [Authentication and handover for drone swarms (arXiv 2201.05657)](https://arxiv.org/pdf/2201.05657)
-- [Drone swarm coordination (Meegle, 2024-2025 survey)](https://www.meegle.com/en_us/topics/autonomous-drones/drone-swarm-coordination)
-- [PRC concepts for UAV swarms in future warfare (CNA, 2025)](https://www.cna.org/reports/2025/07/PRC-Concepts-for-UAV-Swarms-in-Future-Warfare.pdf)
-- [Mission-critical UAV swarm coordination — integrated ROS+LoRa](https://www.sciencedirect.com/science/article/abs/pii/S0140366424002494)
-- This repo's master synthesis: `~/Documents/AI_Workspace/drone_swarm_research/00_MASTER.md`.
+See `docs/CHALLENGES.md` for full reference list + citations.
 """
 
 
-# ── Build app ───────────────────────────────────────────────────────────
+# ── Build app ─────────────────────────────────────────────────────────
 
 
 def build_app():
@@ -243,165 +215,165 @@ def build_app():
 
     PROTOCOL_OPTIONS = ["ALL", "A2A", "Zenoh", "MAVLink", "BFT", "gRPC", "MCP", "DDS"]
 
-    with gr.Blocks(title="SARGVISION Swarm — Comms Sandbox", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(title="SARGVISION Swarm — Live", theme=gr.themes.Soft()) as demo:
         gr.Markdown(
-            """
-            # SARGVISION Swarm — Communication Sandbox
-            **What you're watching:** real A2A / Zenoh / MAVLink / BFT / gRPC traffic between drones.
-            All 5 protocols carry their own message types, byte sizes, packet-loss models, comm-range topology.
-            Brooks-subsumption discipline: LLM emits **intent**, reflex layer closes the **fast loop**.
-            """
+            "# 🛸 SARGVISION Swarm — Communication Sandbox\n"
+            "**5 protocols, real envelopes, watched live.** Brooks-subsumption: LLM = slow intent, reflex = fast control."
         )
 
-        state = gr.State(value=None)
+        with gr.Tabs():
+            # ────────────────── 🎬 LIVE WATCH (default tab) ──────────────────
+            with gr.Tab("🎬 Live Watch"):
+                gr.Markdown(WATCH_INTRO_MD)
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        live_n = gr.Slider(5, 60, value=24, step=1, label="N drones")
+                        live_scenario = gr.Dropdown(
+                            choices=["coverage", "flock", "formation_v", "hover"],
+                            value="coverage",
+                            label="Scenario",
+                        )
+                        live_steps = gr.Slider(60, 400, value=180, step=10, label="Sim ticks")
+                        live_range = gr.Slider(5.0, 30.0, value=15.0, step=0.5, label="Comm range (m)")
+                        live_fps = gr.Slider(2.0, 30.0, value=10.0, step=1.0, label="Frame rate (fps)")
+                        live_seed = gr.Number(value=42, label="Seed", precision=0)
+                        live_play = gr.Button("▶ Play live", variant="primary", size="lg")
+                        live_status = gr.Markdown("Press Play.")
+                    with gr.Column(scale=3):
+                        live_canvas = gr.Image(
+                            label="Swarm — live",
+                            interactive=False,
+                            show_label=False,
+                            show_download_button=False,
+                        )
+                        live_log = gr.Textbox(
+                            label="Event ticker (newest at top)",
+                            value="",
+                            lines=12,
+                            max_lines=12,
+                            interactive=False,
+                        )
 
-        with gr.Row():
-            with gr.Column(scale=1):
-                n_drones = gr.Slider(5, 100, value=30, step=1, label="N drones")
-                scenario = gr.Dropdown(
-                    choices=["flock", "formation_v", "coverage", "hover"],
-                    value="coverage",
-                    label="Scenario",
+                live_play.click(
+                    _live_generator,
+                    inputs=[live_n, live_scenario, live_steps, live_range, live_seed, live_fps],
+                    outputs=[live_canvas, live_log, live_status],
                 )
-                steps = gr.Slider(60, 500, value=200, step=10, label="Sim steps (× 50 ms)")
-                comm_range = gr.Slider(5.0, 30.0, value=15.0, step=0.5, label="Comm range (m)")
-                seed = gr.Number(value=42, label="Seed", precision=0)
-                run_btn = gr.Button("Run rollout", variant="primary")
-                rationale = gr.Markdown()
 
-            with gr.Column(scale=3):
-                with gr.Tabs():
-                    # ── Tab 1: Swarm + Topology ────────────────────────
-                    with gr.Tab("1. Swarm + Topology"):
-                        step_slider = gr.Slider(0, 49, value=0, step=1, label="Replay frame")
-                        with gr.Row():
-                            fig_3d = gr.Plot(label="3D positions")
-                            fig_topo = gr.Plot(label="Comm topology")
-
-                    # ── Tab 2: Wire log ────────────────────────────────
-                    with gr.Tab("2. Wire log"):
-                        with gr.Row():
-                            proto_filter = gr.Dropdown(
-                                choices=PROTOCOL_OPTIONS, value="ALL", label="Filter by protocol"
-                            )
-                            n_rows = gr.Slider(20, 500, value=150, step=10, label="Rows")
-                            refresh_btn = gr.Button("Refresh log", size="sm")
-                        msg_table = gr.Dataframe(
-                            headers=["t (s)", "proto", "src", "dst", "topic", "bytes", "payload"],
-                            datatype=["number", "str", "number", "str", "str", "number", "str"],
-                            interactive=False,
-                            wrap=True,
-                            label="Last messages",
+            # ────────────────── 📊 Static analysis tabs ───────────────────────
+            with gr.Tab("📊 Static rollout"):
+                state = gr.State(value=None)
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        n_drones = gr.Slider(5, 100, value=30, step=1, label="N drones")
+                        scenario = gr.Dropdown(
+                            choices=["flock", "formation_v", "coverage", "hover"],
+                            value="coverage",
+                            label="Scenario",
                         )
-                        with gr.Row():
-                            fig_bw = gr.Plot(label="Bandwidth (last 5 s)")
-                            fig_pie = gr.Plot(label="Protocol mix")
+                        steps = gr.Slider(60, 500, value=200, step=10, label="Sim steps")
+                        comm_range = gr.Slider(5.0, 30.0, value=15.0, step=0.5, label="Comm range (m)")
+                        seed = gr.Number(value=42, label="Seed", precision=0)
+                        run_btn = gr.Button("Run rollout", variant="secondary")
+                        rationale = gr.Markdown()
+                    with gr.Column(scale=3):
+                        with gr.Tabs():
+                            with gr.Tab("Swarm + Topology"):
+                                step_slider = gr.Slider(0, 49, value=0, step=1, label="Replay frame")
+                                with gr.Row():
+                                    fig_3d = gr.Plot(label="3D positions")
+                                    fig_topo = gr.Plot(label="Comm topology")
+                            with gr.Tab("Wire log"):
+                                with gr.Row():
+                                    proto_filter = gr.Dropdown(choices=PROTOCOL_OPTIONS, value="ALL", label="Filter")
+                                    n_rows = gr.Slider(20, 500, value=150, step=10, label="Rows")
+                                    refresh_btn = gr.Button("Refresh", size="sm")
+                                msg_table = gr.Dataframe(
+                                    headers=["t (s)", "proto", "src", "dst", "topic", "bytes", "payload"],
+                                    datatype=["number", "str", "number", "str", "str", "number", "str"],
+                                    interactive=False,
+                                    wrap=True,
+                                    label="Messages",
+                                )
+                                with gr.Row():
+                                    fig_bw = gr.Plot(label="Bandwidth")
+                                    fig_pie = gr.Plot(label="Protocol mix")
+                            with gr.Tab("Decisions"):
+                                gr.Markdown("### Per-drone intent")
+                                intent_table = gr.Dataframe(
+                                    headers=["drone", "intent"], datatype=["number", "str"], interactive=False
+                                )
+                                gr.Markdown("### SwarmRaft K=7 BFT votes")
+                                bft_table = gr.Dataframe(
+                                    headers=["t (s)", "proposal", "result", "yes", "no", "byzantine"],
+                                    datatype=["number", "str", "str", "number", "number", "str"],
+                                    interactive=False,
+                                )
+                                gr.Markdown("### ED-CBBA bidding")
+                                cbba_table = gr.Dataframe(
+                                    headers=["t (s)", "n_bids", "task", "assigned_drone"],
+                                    datatype=["number", "number", "str", "number"],
+                                    interactive=False,
+                                )
 
-                    # ── Tab 3: Decisions ───────────────────────────────
-                    with gr.Tab("3. Decisions + BFT + CBBA"):
-                        gr.Markdown("### Per-drone current intent (LLM-driven)")
-                        intent_table = gr.Dataframe(
-                            headers=["drone", "intent"],
-                            datatype=["number", "str"],
-                            interactive=False,
-                        )
-                        gr.Markdown("### SwarmRaft K=7 BFT votes (mission-state quorum)")
-                        bft_table = gr.Dataframe(
-                            headers=["t (s)", "proposal", "result", "yes", "no", "byzantine"],
-                            datatype=["number", "str", "str", "number", "number", "str"],
-                            interactive=False,
-                        )
-                        gr.Markdown("### ED-CBBA task-bidding (event-driven)")
-                        cbba_table = gr.Dataframe(
-                            headers=["t (s)", "n_bids", "task", "assigned_drone"],
-                            datatype=["number", "number", "str", "number"],
-                            interactive=False,
-                        )
+                def _run(n, sc, st, cr, sd):
+                    t0 = time.time()
+                    result = rollout(
+                        n_drones=int(n), scenario=sc, steps=int(st), seed=int(sd),
+                        comm_range_m=float(cr), snapshot_every=4,
+                    )
+                    elapsed = time.time() - t0
+                    n_frames = len(result.states)
+                    now = result.states[-1].t
+                    return (
+                        result,
+                        _3d_figure(result, 0, sc),
+                        _topo_figure(result, 0),
+                        gr.Slider(minimum=0, maximum=max(0, n_frames - 1), value=0, step=1),
+                        _message_table(result, max_rows=150, proto_filter="ALL"),
+                        bandwidth_figure(result.bandwidth.rates_by_protocol(now), title="Bytes / sec by protocol"),
+                        protocol_breakdown_pie(result.message_log.by_protocol()),
+                        _intents_table(result),
+                        _bft_table(result),
+                        _cbba_table(result),
+                        f"**Plan:** {result.plan_rationale}\n\n*{n_frames} frames · {len(result.message_log)} wire messages · {elapsed:.2f} s wall.*",
+                    )
 
-                    # ── Tab 4: Protocols ───────────────────────────────
-                    with gr.Tab("4. Protocols"):
-                        gr.Markdown(PROTOCOLS_MD)
+                def _scrub(result, idx, sc):
+                    if result is None:
+                        return None, None
+                    return _3d_figure(result, int(idx), sc), _topo_figure(result, int(idx))
 
-                    # ── Tab 5: Challenges ──────────────────────────────
-                    with gr.Tab("5. Challenges"):
-                        gr.Markdown(CHALLENGES_MD)
+                def _refresh_log(result, rows, pf):
+                    if result is None:
+                        return [], None, None
+                    now = result.states[-1].t
+                    return (
+                        _message_table(result, max_rows=int(rows), proto_filter=pf),
+                        bandwidth_figure(result.bandwidth.rates_by_protocol(now), title="Bytes / sec by protocol"),
+                        protocol_breakdown_pie(result.message_log.by_protocol()),
+                    )
 
-        # ── Callbacks ──────────────────────────────────────────────────
+                run_btn.click(
+                    _run,
+                    inputs=[n_drones, scenario, steps, comm_range, seed],
+                    outputs=[state, fig_3d, fig_topo, step_slider, msg_table, fig_bw, fig_pie, intent_table, bft_table, cbba_table, rationale],
+                )
+                step_slider.change(_scrub, inputs=[state, step_slider, scenario], outputs=[fig_3d, fig_topo])
+                refresh_btn.click(_refresh_log, inputs=[state, n_rows, proto_filter], outputs=[msg_table, fig_bw, fig_pie])
 
-        def _run(n, sc, st, cr, sd):
-            t0 = time.time()
-            result = rollout(
-                n_drones=int(n),
-                scenario=sc,
-                steps=int(st),
-                seed=int(sd),
-                comm_range_m=float(cr),
-                snapshot_every=4,
-            )
-            elapsed = time.time() - t0
-            n_frames = len(result.states)
-            now = result.states[-1].t
-            return (
-                result,
-                _3d_figure(result, 0, sc),
-                _topo_figure(result, 0),
-                gr.Slider(minimum=0, maximum=max(0, n_frames - 1), value=0, step=1),
-                _message_table(result, max_rows=150, proto_filter="ALL"),
-                bandwidth_figure(result.bandwidth.rates_by_protocol(now), title="Bytes / sec by protocol"),
-                protocol_breakdown_pie(result.message_log.by_protocol()),
-                _intents_table(result),
-                _bft_table(result),
-                _cbba_table(result),
-                (
-                    f"**Plan:** {result.plan_rationale}\n\n"
-                    f"*{n_frames} frames · {len(result.message_log)} wire messages · {elapsed:.2f} s wall.*"
-                ),
-            )
-
-        def _scrub(result, idx, sc):
-            if result is None:
-                return None, None
-            return _3d_figure(result, int(idx), sc), _topo_figure(result, int(idx))
-
-        def _refresh_log(result, rows, pf):
-            if result is None:
-                return [], None, None
-            now = result.states[-1].t
-            return (
-                _message_table(result, max_rows=int(rows), proto_filter=pf),
-                bandwidth_figure(result.bandwidth.rates_by_protocol(now), title="Bytes / sec by protocol"),
-                protocol_breakdown_pie(result.message_log.by_protocol()),
-            )
-
-        run_btn.click(
-            _run,
-            inputs=[n_drones, scenario, steps, comm_range, seed],
-            outputs=[
-                state,
-                fig_3d,
-                fig_topo,
-                step_slider,
-                msg_table,
-                fig_bw,
-                fig_pie,
-                intent_table,
-                bft_table,
-                cbba_table,
-                rationale,
-            ],
-        )
-        step_slider.change(_scrub, inputs=[state, step_slider, scenario], outputs=[fig_3d, fig_topo])
-        refresh_btn.click(
-            _refresh_log,
-            inputs=[state, n_rows, proto_filter],
-            outputs=[msg_table, fig_bw, fig_pie],
-        )
+            # ────────────────── 📖 Reference tabs ──────────────────────────
+            with gr.Tab("📖 Protocols"):
+                gr.Markdown(PROTOCOLS_MD)
+            with gr.Tab("⚠ Challenges"):
+                gr.Markdown(CHALLENGES_MD)
 
     return demo
 
 
 def main() -> None:
     app = build_app()
+    app.queue()  # required for streaming generators
     app.launch(server_name="127.0.0.1", inbrowser=False, share=False)
 
 
