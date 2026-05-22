@@ -26,6 +26,8 @@ class Hostile:
     alive: bool = True
     spawn_bearing_deg: float = 0.0
     intent_label: str = "INBOUND"
+    callsign: str = ""
+    assigned_to: int | None = None  # drone_id of friendly intercepting
 
 
 @dataclass
@@ -74,12 +76,14 @@ class HostileFleet:
         to_center[2] = 0.0
         norm = float(np.linalg.norm(to_center))
         vel = (to_center / max(norm, 1e-6)) * self.cruise_speed_ms
+        callsign = f"KAM-{self._next_id - 1000 + 1001:04d}"  # KAM-1001..
         self.hostiles.append(
             Hostile(
                 id=self._next_id,
                 pos=pos.astype(float),
                 vel=vel.astype(float),
                 spawn_bearing_deg=math.degrees(bearing) % 360.0,
+                callsign=callsign,
             )
         )
         self._next_id += 1
@@ -95,7 +99,7 @@ class HostileFleet:
 
         Returns a tick summary dict with kills_this_step + new_contacts.
         """
-        kills_this_step: list[int] = []
+        kills_this_step: list[dict] = []
         new_contacts = 0
         for h in self.hostiles:
             if not h.alive:
@@ -115,11 +119,19 @@ class HostileFleet:
             dists = np.linalg.norm(diffs, axis=1)
             min_d = float(dists.min()) if len(dists) else float("inf")
             if min_d < self.engagement_radius_m:
+                killer_idx = int(np.argmin(dists))
                 h.alive = False
                 h.intent_label = "NEUTRALIZED"
-                kills_this_step.append(h.id)
+                kills_this_step.append(
+                    {
+                        "hostile_id": h.id,
+                        "callsign": h.callsign,
+                        "killer_idx": killer_idx,
+                        "pos": [float(h.pos[0]), float(h.pos[1]), float(h.pos[2])],
+                    }
+                )
                 self.neutralized += 1
-            elif min_d < 6.0 and h.intent_label == "INBOUND":
+            elif min_d < 8.0 and h.intent_label == "INBOUND":
                 h.intent_label = "TERMINAL"
                 new_contacts += 1
 

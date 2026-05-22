@@ -30,6 +30,16 @@ from sargvision_swarm.core.bvc import bvc_safe_velocity
 from sargvision_swarm.orchestrator import EDCBBA, MissionGoal, MissionPlanner, SwarmRaft, Task
 from sargvision_swarm.sim import SimConfig, SimpleSim
 from sargvision_swarm.sim.hostiles import HostileFleet
+
+
+def _default_task_for_role(role) -> str:
+    name = role.value if hasattr(role, "value") else str(role)
+    return {
+        "leader": "COMMAND ELEMENT",
+        "scout": "PATROL PERIMETER",
+        "relay": "RELAY LINK",
+        "worker": "STATION HOLD",
+    }.get(name, "STATION HOLD")
 from sargvision_swarm.viz.live_frame import FloatingEvent, RecentMessage, TrailHistory
 
 
@@ -110,6 +120,29 @@ class LiveSession:
             self.hostile_fleet.spawn_initial(center=self.swarm.positions.mean(axis=0))
             self._hostile_first_contact_fired = False
 
+        # Role distribution — make this look like a real ORBAT.
+        # 1 LEADER + 4 SCOUTS + 4 RELAYS + rest STRIKERS (WORKER).
+        from sargvision_swarm.core.state import Role as _Role
+
+        for i, d in enumerate(self.swarm.drones):
+            if i == 0:
+                d.role = _Role.LEADER
+            elif i in (1, 2, 3, 4):
+                d.role = _Role.SCOUT
+            elif i in (5, 6, 7, 8):
+                d.role = _Role.RELAY
+            else:
+                d.role = _Role.WORKER
+
+        # Per-drone current task label surfaced to the console.
+        self.current_task: dict[int, str] = {
+            d.id: _default_task_for_role(d.role) for d in self.swarm.drones
+        }
+        # Interceptor → hostile_id assignment.
+        self.intercept_assignment: dict[int, int] = {}
+        # Recent kill events (last ~6s of explosions for the console flash layer).
+        self.kill_events: deque[dict] = deque(maxlen=60)
+
         # Live operational flags toggleable from the console.
         self.jamming: bool = False
         self.gnss_denied: bool = False
@@ -133,7 +166,25 @@ class LiveSession:
             per_goal = np.array(
                 [b.goal_pos if b.goal_pos else self.goal_pos.tolist() for b in self.plan.bundles]
             )
-            slot_pull = (per_goal - positions) * 1.2 - velocities * 0.5
+            # If a drone is assigned to intercept a hostile, override its slot.
+            if self.hostile_fleet is not None:
+                hostile_by_id = {h.id: h for h in self.hostile_fleet.hostiles}
+                for friendly_id, hostile_id in list(self.intercept_assignment.items()):
+                    h = hostile_by_id.get(hostile_id)
+                    if h is None or not h.alive:
+                        # release this interceptor
+                        self.intercept_assignment.pop(friendly_id, None)
+                        self.current_task[friendly_id] = _default_task_for_role(
+                            self.swarm.drones[friendly_id].role
+                        )
+                        continue
+                    per_goal[friendly_id] = h.pos
+            # Stronger pull for interceptors — they break formation aggressively.
+            pull_gain = np.full(positions.shape[0], 1.2)
+            for friendly_id in self.intercept_assignment.keys():
+                if 0 <= friendly_id < pull_gain.size:
+                    pull_gain[friendly_id] = 3.0
+            slot_pull = (per_goal - positions) * pull_gain[:, None] - velocities * 0.5
             v_cmd = bvc_safe_velocity(positions, slot_pull, safety_radius=1.0, dt=0.1)
         elif self.plan.scenario == "hover":
             v_cmd = (self.goal_pos - positions) * 1.0 - velocities * 0.8
@@ -154,6 +205,48 @@ class LiveSession:
                 friendly_positions=self.swarm.positions,
                 center=self.swarm.positions.mean(axis=0),
             )
+
+            # ── Assign interceptors for any TERMINAL hostile without one ──
+            free_strikers = [
+                d.id
+                for d in self.swarm.drones
+                if d.role.value == "worker" and d.id not in self.intercept_assignment
+            ]
+            for h in self.hostile_fleet.hostiles:
+                if not h.alive or h.intent_label != "TERMINAL":
+                    continue
+                if h.assigned_to is not None:
+                    continue
+                # Find nearest free striker.
+                if not free_strikers:
+                    break
+                pos_h = h.pos
+                nearest = min(
+                    free_strikers,
+                    key=lambda fid: float(
+                        np.linalg.norm(self.swarm.drones[fid].pos - pos_h)
+                    ),
+                )
+                self.intercept_assignment[nearest] = h.id
+                h.assigned_to = nearest
+                self.current_task[nearest] = f"INTERCEPT {h.callsign}"
+                free_strikers.remove(nearest)
+
+            # ── Record kill events ──
+            for kill in tick["kills_this_step"]:
+                killer_idx = kill["killer_idx"]
+                killer = self.swarm.drones[killer_idx]
+                self.kill_events.append(
+                    {
+                        "t": float(t),
+                        "killer_id": int(killer.id),
+                        "callsign": kill["callsign"],
+                        "pos": kill["pos"],
+                    }
+                )
+                # release intercept
+                self.intercept_assignment.pop(killer.id, None)
+                self.current_task[killer.id] = _default_task_for_role(killer.role)
             # Kills → BFT engage authorization (first contact only)
             if tick["new_contacts"] > 0 and not self._hostile_first_contact_fired:
                 self._hostile_first_contact_fired = True
@@ -184,9 +277,9 @@ class LiveSession:
                 result.event_log_lines.append(
                     f"t={t:.2f}s  ⚔  first hostile contact — engage authorized"
                 )
-            for kill_id in tick["kills_this_step"]:
+            for kill in tick["kills_this_step"]:
                 result.event_log_lines.append(
-                    f"t={t:.2f}s  ☠  hostile {kill_id} neutralized"
+                    f"t={t:.2f}s  💥 DRN-{self.swarm.drones[kill['killer_idx']].id:03d} → {kill['callsign']} NEUTRALIZED"
                 )
 
         # ── LLM intent refresh ──

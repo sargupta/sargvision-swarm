@@ -56,8 +56,14 @@ def _affiliation_for_drone(drone) -> str:  # noqa: ANN001
 
 
 def _platform_for_drone(drone) -> str:  # noqa: ANN001
-    # Phase A — single platform. Real fleets will mix ALFA-S / Sheshnaag / Tapas.
-    return "ALFA-S"
+    # Map role → platform — looks like a real heterogeneous ORBAT.
+    name = drone.role.value if hasattr(drone.role, "value") else str(drone.role)
+    return {
+        "leader": "Sheshnaag-150 (Command)",
+        "scout": "ALFA-S Scout",
+        "relay": "Tapas-BH Relay",
+        "worker": "ALFA-S Striker",
+    }.get(name, "ALFA-S Striker")
 
 
 def build_frame(session: LiveSession) -> dict[str, Any]:
@@ -69,16 +75,20 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
             hostiles.append(
                 {
                     "id": int(h.id),
+                    "callsign": h.callsign,
                     "lon": lon,
                     "lat": lat,
                     "alt_m": float(h.pos[2]),
                     "alive": bool(h.alive),
                     "bearing_deg": float(h.spawn_bearing_deg),
                     "intent": h.intent_label,
+                    "assigned_to": h.assigned_to,
                 }
             )
 
     drones = []
+    intercept = getattr(session, "intercept_assignment", {}) or {}
+    task_map = getattr(session, "current_task", {}) or {}
     for d in session.swarm.drones:
         lon, lat = local_to_geo(float(d.pos[0]), float(d.pos[1]))
         vx, vy = float(d.vel[0]), float(d.vel[1])
@@ -96,6 +106,8 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                 "intent": session.intents.get(int(d.id), "hold_formation"),
                 "affiliation": _affiliation_for_drone(d),
                 "platform": _platform_for_drone(d),
+                "task": task_map.get(int(d.id), "STATION HOLD"),
+                "intercept_target": intercept.get(int(d.id)),
             }
         )
 
@@ -156,6 +168,23 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
             "remaining": int(session.hostile_fleet.remaining),
             "neutralized": int(session.hostile_fleet.neutralized),
         }
+    kill_events = []
+    now = float(session.swarm.t)
+    for k in list(getattr(session, "kill_events", []) or []):
+        # Only surface kills from the last 4s so the flash sprite fades naturally.
+        if now - float(k["t"]) <= 4.0:
+            from sargvision_swarm.server.geo import local_to_geo as _l2g
+            klon, klat = _l2g(float(k["pos"][0]), float(k["pos"][1]))
+            kill_events.append(
+                {
+                    "t": float(k["t"]),
+                    "killer_id": int(k["killer_id"]),
+                    "callsign": str(k["callsign"]),
+                    "lon": klon,
+                    "lat": klat,
+                    "alt_m": float(k["pos"][2]),
+                }
+            )
     return {
         "t": float(session.swarm.t),
         "step": int(session.step_i),
@@ -167,6 +196,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         "recent_messages": recent_payload,
         "bft_events": bft_events,
         "cbba_events": cbba_events,
+        "kill_events": kill_events,
         "stats": stats,
         "flags": {
             "jamming": bool(getattr(session, "jamming", False)),
