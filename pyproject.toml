@@ -24,6 +24,11 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "structlog>=24.1",
+    # WebSocket bridge (Phase A console)
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "msgpack>=1.1",
+    "websockets>=13.0",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +54,7 @@ dev = [
 [project.scripts]
 swarm = "sargvision_swarm.cli:app"
 swarm-demo = "sargvision_swarm.demo.app:main"
+swarm-bridge = "sargvision_swarm.server.bridge:main"
 
 [build-system]
 requires = ["hatchling"]
