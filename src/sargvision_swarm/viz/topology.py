@@ -41,7 +41,7 @@ def topology_figure(swarm: SwarmState, comm: CommModel, title: str = ""):
         y=edge_y,
         z=edge_z,
         mode="lines",
-        line=dict(width=2, color="#10b98155"),
+        line=dict(width=2, color="rgba(16, 185, 129, 0.35)"),
         hoverinfo="skip",
         showlegend=False,
         name="comm-links",
