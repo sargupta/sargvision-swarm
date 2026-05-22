@@ -21,14 +21,22 @@ def meters_per_deg(lat: float) -> tuple[float, float]:
     return m_per_deg_lat, m_per_deg_lon
 
 
+# Visual amplification — sim spawns drones in a ~20m box. At realistic Leh map
+# zoom that's a few pixels. We scale sim meters into real-world meters by this
+# factor purely for visualization so the swarm is legible. The physics stay
+# native; only the rendered position is amplified.
+SIM_GEO_SCALE = 80.0
+
+
 def local_to_geo(
     x_m: float,
     y_m: float,
     anchor_lat: float = DEFAULT_ANCHOR_LAT,
     anchor_lon: float = DEFAULT_ANCHOR_LON,
+    scale: float = SIM_GEO_SCALE,
 ) -> tuple[float, float]:
     """Convert sim x (east, meters) + y (north, meters) → (lon, lat)."""
     m_lat, m_lon = meters_per_deg(anchor_lat)
-    lat = anchor_lat + (y_m / m_lat)
-    lon = anchor_lon + (x_m / m_lon)
+    lat = anchor_lat + (y_m * scale / m_lat)
+    lon = anchor_lon + (x_m * scale / m_lon)
     return lon, lat
