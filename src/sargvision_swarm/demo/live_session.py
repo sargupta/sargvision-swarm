@@ -90,6 +90,9 @@ class LiveSession:
         self.cbba_flash_ttl = 0
         self.bft_count = 0
         self.cbba_count = 0
+        # Cross-step history surfaces in the frame for the console.
+        self.bft_history: list[dict] = []
+        self.cbba_history: list[dict] = []
         self.step_i = 0
         self.goal_pos = np.array(self.plan.goal_pos)
 
@@ -168,6 +171,17 @@ class LiveSession:
             tag = f"BFT PASSED · advance_phase:engage  ({sum(1 for v in votes if v.decision=='yes')}/7)"
             result.floating_events.append(FloatingEvent(text=tag, x=0.0, y=24.0, color=(252, 211, 77)))
             result.event_log_lines.append(f"t={t:.2f}s  ⚖  BFT vote PASSED — advance_phase:engage")
+            self.bft_history.append(
+                {
+                    "t": float(t),
+                    "proposal": "advance_phase:engage",
+                    "passed": bool(passed),
+                    "yes": sum(1 for v in votes if v.decision == "yes"),
+                    "no": sum(1 for v in votes if v.decision == "no"),
+                    "voters": [int(v.voter_id) for v in votes],
+                    "byzantine": [],
+                }
+            )
         if self.step_i == 100 and self.scenario != "hover":
             byz = set(self._rng.sample(range(self.n_drones), k=min(2, self.n_drones)))
             passed, votes = self.raft.propose("re-plan:wind-gust", byzantine_ids=byz)
@@ -190,6 +204,17 @@ class LiveSession:
             result.event_log_lines.append(
                 f"t={t:.2f}s  ⚖  BFT vote {outcome} — re-plan (byzantine={sorted(byz)})"
             )
+            self.bft_history.append(
+                {
+                    "t": float(t),
+                    "proposal": "re-plan:wind-gust",
+                    "passed": bool(passed),
+                    "yes": sum(1 for v in votes if v.decision == "yes"),
+                    "no": sum(1 for v in votes if v.decision == "no"),
+                    "voters": [int(v.voter_id) for v in votes],
+                    "byzantine": [int(b) for b in byz],
+                }
+            )
 
         # ── ED-CBBA bidding (coverage scenario, every 25 steps) ──
         if self.cbba_tasks and self.step_i % 25 == 0:
@@ -206,6 +231,15 @@ class LiveSession:
                 result.new_messages.append(m)
             if bids:
                 self.cbba_count += 1
+                for bid in bids:
+                    self.cbba_history.append(
+                        {
+                            "t": float(t),
+                            "task_id": str(bid.task_id),
+                            "bidder_id": int(bid.bidder_id),
+                            "bid_score": float(bid.bid_score),
+                        }
+                    )
                 self.cbba_flash = {}
                 for bid in bids[:6]:
                     task_pos = next((t.pos for t in self.cbba_tasks if t.id == bid.task_id), None)

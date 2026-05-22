@@ -120,9 +120,17 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         "by_protocol": {k: int(v) for k, v in stats_raw.get("by_proto", {}).items()},
     }
 
-    # BFT + CBBA events (just bag everything — frontend trims)
+    # BFT + CBBA history surfaced from session
     bft_events = [_bft_payload(ev) for ev in getattr(session, "bft_history", [])]
-    cbba_events = []  # populated in Phase C
+    cbba_events = [
+        {
+            "t": float(ev["t"]),
+            "task_id": str(ev["task_id"]),
+            "bidder_id": int(ev["bidder_id"]),
+            "bid_score": float(ev["bid_score"]),
+        }
+        for ev in getattr(session, "cbba_history", [])
+    ]
 
     return {
         "t": float(session.swarm.t),
