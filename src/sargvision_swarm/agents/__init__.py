@@ -7,7 +7,8 @@ from sargvision_swarm.agents.backends import (
     OllamaBackend,
     make_backend,
 )
-from sargvision_swarm.agents.drone_agent import DroneAgent, Observation, AgentDecision
+from sargvision_swarm.agents.drone_agent import AgentDecision, DroneAgent, Observation
+from sargvision_swarm.agents.peer_dialogue import PeerDialogue, agent_card
 
 __all__ = [
     "AgentDecision",
@@ -17,5 +18,7 @@ __all__ = [
     "MockBackend",
     "Observation",
     "OllamaBackend",
+    "PeerDialogue",
+    "agent_card",
     "make_backend",
 ]
