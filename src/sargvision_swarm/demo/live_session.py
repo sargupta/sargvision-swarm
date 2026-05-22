@@ -29,6 +29,7 @@ from sargvision_swarm.core import ReflexParams, SwarmState, compose_reflex
 from sargvision_swarm.core.bvc import bvc_safe_velocity
 from sargvision_swarm.orchestrator import EDCBBA, MissionGoal, MissionPlanner, SwarmRaft, Task
 from sargvision_swarm.sim import SimConfig, SimpleSim
+from sargvision_swarm.sim.hostiles import HostileFleet
 from sargvision_swarm.viz.live_frame import FloatingEvent, RecentMessage, TrailHistory
 
 
@@ -96,6 +97,23 @@ class LiveSession:
         self.step_i = 0
         self.goal_pos = np.array(self.plan.goal_pos)
 
+        # Hostile stream only active in counter-swarm scenario.
+        self.hostile_fleet: HostileFleet | None = None
+        if scenario == "coverage":
+            self.hostile_fleet = HostileFleet(
+                spawn_count=12,
+                spawn_radius_m=40.0,
+                cruise_speed_ms=1.0,
+                engagement_radius_m=2.8,
+                seed=(seed or 0) + 1,
+            )
+            self.hostile_fleet.spawn_initial(center=self.swarm.positions.mean(axis=0))
+            self._hostile_first_contact_fired = False
+
+        # Live operational flags toggleable from the console.
+        self.jamming: bool = False
+        self.gnss_denied: bool = False
+
     # ── Public API ─────────────────────────────────────────────────────
 
     def step(self) -> TickResult:
@@ -128,6 +146,48 @@ class LiveSession:
         # Update trails
         for d in self.swarm.drones:
             self.trails.push(d.id, float(d.pos[0]), float(d.pos[1]))
+
+        # ── Hostile fleet ───────────────────────────────────────────
+        if self.hostile_fleet is not None:
+            tick = self.hostile_fleet.step(
+                dt=self.sim.cfg.dt,
+                friendly_positions=self.swarm.positions,
+                center=self.swarm.positions.mean(axis=0),
+            )
+            # Kills → BFT engage authorization (first contact only)
+            if tick["new_contacts"] > 0 and not self._hostile_first_contact_fired:
+                self._hostile_first_contact_fired = True
+                passed, votes = self.raft.propose("authorize_engage:hostile_contact")
+                for v in votes:
+                    m = WireMessage.make(
+                        src=v.voter_id,
+                        protocol=Protocol.BFT,
+                        topic="bft/swarm-raft/vote",
+                        payload=v,
+                        t=t,
+                    )
+                    result.new_messages.append(m)
+                self.bft_flash = {v.voter_id for v in votes}
+                self.bft_flash_ttl = 12
+                self.bft_count += 1
+                self.bft_history.append(
+                    {
+                        "t": float(t),
+                        "proposal": "authorize_engage:hostile_contact",
+                        "passed": bool(passed),
+                        "yes": sum(1 for v in votes if v.decision == "yes"),
+                        "no": sum(1 for v in votes if v.decision == "no"),
+                        "voters": [int(v.voter_id) for v in votes],
+                        "byzantine": [],
+                    }
+                )
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  ⚔  first hostile contact — engage authorized"
+                )
+            for kill_id in tick["kills_this_step"]:
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  ☠  hostile {kill_id} neutralized"
+                )
 
         # ── LLM intent refresh ──
         if self.step_i % self.intent_refresh_every == 0:

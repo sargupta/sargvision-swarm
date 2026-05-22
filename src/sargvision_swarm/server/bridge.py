@@ -61,6 +61,23 @@ def _platform_for_drone(drone) -> str:  # noqa: ANN001
 
 
 def build_frame(session: LiveSession) -> dict[str, Any]:
+    hostiles = []
+    if getattr(session, "hostile_fleet", None) is not None:
+        from sargvision_swarm.server.geo import local_to_geo as _local_to_geo
+        for h in session.hostile_fleet.hostiles:
+            lon, lat = _local_to_geo(float(h.pos[0]), float(h.pos[1]))
+            hostiles.append(
+                {
+                    "id": int(h.id),
+                    "lon": lon,
+                    "lat": lat,
+                    "alt_m": float(h.pos[2]),
+                    "alive": bool(h.alive),
+                    "bearing_deg": float(h.spawn_bearing_deg),
+                    "intent": h.intent_label,
+                }
+            )
+
     drones = []
     for d in session.swarm.drones:
         lon, lat = local_to_geo(float(d.pos[0]), float(d.pos[1]))
@@ -132,16 +149,29 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         for ev in getattr(session, "cbba_history", [])
     ]
 
+    threat = None
+    if getattr(session, "hostile_fleet", None) is not None:
+        threat = {
+            "total": int(session.hostile_fleet.total),
+            "remaining": int(session.hostile_fleet.remaining),
+            "neutralized": int(session.hostile_fleet.neutralized),
+        }
     return {
         "t": float(session.swarm.t),
         "step": int(session.step_i),
         "scenario": session.scenario,
         "drones": drones,
+        "hostiles": hostiles,
+        "threat": threat,
         "edges": edges,
         "recent_messages": recent_payload,
         "bft_events": bft_events,
         "cbba_events": cbba_events,
         "stats": stats,
+        "flags": {
+            "jamming": bool(getattr(session, "jamming", False)),
+            "gnss_denied": bool(getattr(session, "gnss_denied", False)),
+        },
     }
 
 
@@ -298,6 +328,29 @@ def healthz() -> dict:
 async def set_scenario(name: str, n: int = 24, seed: int = 42) -> dict:
     await service.start(n_drones=n, scenario=name, seed=seed, comm_range_m=18.0, hz=10.0)
     return {"started": name, "n": n, "seed": seed}
+
+
+@app.post("/jam")
+async def toggle_jam() -> dict:
+    sess = service.session
+    if sess is None:
+        return {"ok": False, "reason": "no active session"}
+    sess.jamming = not sess.jamming
+    # Halve comm range when jamming, restore when off.
+    if sess.jamming:
+        sess.comm.range_m = max(6.0, sess.comm.range_m * 0.45)
+    else:
+        sess.comm.range_m = 18.0
+    return {"ok": True, "jamming": sess.jamming, "range_m": sess.comm.range_m}
+
+
+@app.post("/gnss/toggle")
+async def toggle_gnss() -> dict:
+    sess = service.session
+    if sess is None:
+        return {"ok": False, "reason": "no active session"}
+    sess.gnss_denied = not sess.gnss_denied
+    return {"ok": True, "gnss_denied": sess.gnss_denied}
 
 
 @app.websocket("/swarm")
