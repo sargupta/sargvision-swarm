@@ -359,12 +359,40 @@ class LiveSession:
                     for i in range(positions.shape[0])
                 ]
             )
-            slot_pull = (per_goal - positions) * 0.9 - velocities * 0.4
+            # Jamming penalty: slow the swarm + reduce pull gain (~half speed)
+            jam_factor = 0.45 if self.jamming else 1.0
+            slot_pull = (per_goal - positions) * (0.9 * jam_factor) - velocities * 0.4
             v_cmd = bvc_safe_velocity(positions, slot_pull, safety_radius=1.2, dt=0.1)
-            # Task labels reflect current corridor + assignment.
+
+            # GNSS-denied: add per-tick position drift (each drone gets a small
+            # random walk in xy because nav drifts without GPS lock). Vision-
+            # SLAM accuracy ~2 cm/min cumulative — at 10 Hz that's ~3 mm/tick
+            # in real space, scaled here to sim metres to be visible.
+            if self.gnss_denied:
+                drift = np.random.default_rng().normal(scale=0.18, size=(positions.shape[0], 3))
+                drift[:, 2] = 0.0
+                for i, d in enumerate(self.swarm.drones):
+                    d.pos = d.pos + drift[i]
+
+            # Task labels reflect current corridor + assignment, plus
+            # degraded-ops badges when toggles are hot.
             for i in range(positions.shape[0]):
                 zid = self.migration_field.assignment.get(i, "?")
-                self.current_task[i] = f"MIGRATE → {zid}"
+                base = f"MIGRATE → {zid}"
+                if self.gnss_denied and self.jamming:
+                    self.current_task[i] = f"DEGRADED · {base}"
+                elif self.gnss_denied:
+                    self.current_task[i] = f"BLIND · {base}"
+                elif self.jamming:
+                    self.current_task[i] = f"JAMMED · {base}"
+                else:
+                    self.current_task[i] = base
+
+            # Battery drain accelerated when degraded (sensor fusion + DSP cost)
+            extra = 0.0003 * (int(self.jamming) + int(self.gnss_denied))
+            if extra > 0:
+                for d in self.swarm.drones:
+                    d.battery = max(0.0, d.battery - extra)
         elif self.plan.scenario == "sead_ingress" and self.chanakya_state is not None:
             # CHANAKYA: plan geodesics across the threat manifold on first call
             # (or whenever the defense field is dirty), then follow waypoints.
