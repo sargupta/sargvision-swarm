@@ -251,6 +251,56 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
             "n_hostiles_alive": int(threat["remaining"]) if threat else 0,
         }
 
+    # ── GOVERNED MIGRATION zones + hazards + occupancy ──
+    migration_field = getattr(session, "migration_field", None)
+    migration_summary: dict[str, Any] | None = None
+    if migration_field is not None:
+        occ = migration_field.occupancy()
+        from sargvision_swarm.server.geo import local_to_geo as _mig_l2g
+        zones_payload = []
+        for z in migration_field.zones:
+            zlon, zlat = _mig_l2g(float(z.center[0]), float(z.center[1]))
+            zones_payload.append(
+                {
+                    "id": z.id,
+                    "name": z.name,
+                    "kind": z.kind,
+                    "lon": zlon,
+                    "lat": zlat,
+                    "alt_m": float(z.center[2]),
+                    "radius_m": float(z.radius_m * 80.0),  # geo-scaled metres
+                    "capacity": int(z.capacity),
+                    "occupancy": int(occ.get(z.id, 0)),
+                    "color": z.color_hex,
+                }
+            )
+        hazards_payload = []
+        for h in migration_field.hazards:
+            hlon, hlat = _mig_l2g(float(h.center[0]), float(h.center[1]))
+            hazards_payload.append(
+                {
+                    "id": h.id,
+                    "name": h.name,
+                    "lon": hlon,
+                    "lat": hlat,
+                    "alt_m": float(h.center[2]),
+                    "radius_m": float(h.radius_m * 80.0),
+                    "severity": float(h.severity),
+                    "pulse_phase": float(h.pulse_phase),
+                }
+            )
+        migration_summary = {
+            "zones": zones_payload,
+            "hazards": hazards_payload,
+            "completed_loops": int(migration_field.completed_loops),
+            "violations": int(migration_field.violations),
+            "collisions": int(migration_field.collisions),
+            "yields": int(migration_field.yields),
+            "assignments": {
+                str(k): v for k, v in migration_field.assignment.items()
+            },
+        }
+
     # ── SHIELD aggregate summary surfaced to console ──
     loyal_n = sum(1 for d in drones if d["shield_class"] == "loyal")
     suspect_n = sum(1 for d in drones if d["shield_class"] == "suspect")
@@ -285,6 +335,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         "kill_events": kill_events,
         "shield": shield_summary,
         "vajra": vajra_summary,
+        "migration": migration_summary,
         "stats": stats,
         "flags": {
             "jamming": bool(getattr(session, "jamming", False)),

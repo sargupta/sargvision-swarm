@@ -118,6 +118,21 @@ class MissionPlanner:
                 ],
                 rationale="CHANAKYA Riemannian geodesic ingress across hostile IADS.",
             )
+        if scenario == "migration":
+            return MissionPlan(
+                scenario=scenario,
+                algorithm="governed_migration",
+                goal_pos=[0.0, 25.0, 6.0],
+                bundles=[
+                    TaskBundle(drone_id=i, role=Role.WORKER.value)
+                    for i in range(goal.n_drones)
+                ],
+                rationale=(
+                    "GOVERNED MIGRATION Leh → forward LAC. 100 drones load-balance "
+                    "across Khardung La / Zoji La / Tanglang La passes, avoiding glacier "
+                    "storms + wind shear. Per-zone capacity, hazard-aware routing."
+                ),
+            )
         # Default: hover in place
         return MissionPlan(
             scenario="hover",

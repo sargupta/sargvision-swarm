@@ -183,6 +183,21 @@ class LiveSession:
             self.hostile_fleet.spawn_initial(center=self.swarm.positions.mean(axis=0))
             self._hostile_first_contact_fired = False
 
+        # ── GOVERNED MIGRATION scenario — multi-corridor traversal ──
+        self.migration_field = None
+        if scenario == "migration":
+            from sargvision_swarm.sim.migration_zones import GovernedMigrationField
+            self.migration_field = GovernedMigrationField.build_ladakh()
+            n = n_drones
+            # Spawn drones in a tight band at START (south edge of map)
+            xs = np.linspace(-5.5, 5.5, n)
+            ys = np.full(n, -25.0) + np.random.default_rng(seed or 0).uniform(-1.5, 1.5, n)
+            zs = np.full(n, 6.0)
+            for i, d in enumerate(self.swarm.drones):
+                d.pos = np.array([xs[i], ys[i], zs[i]], dtype=float)
+                d.vel = np.zeros(3)
+            self.migration_field.initial_assignments(n)
+
         # CHANAKYA SEAD-ingress scenario — friendlies cross a hostile IADS.
         self.defense_field: DefenseField | None = None
         self.chanakya_state: ChanakyaState | None = None
@@ -208,7 +223,13 @@ class LiveSession:
                 engagement_radius=5.5,
             )
             self.chanakya_state = ChanakyaState()
-            self.chanakya_params = ChanakyaParams()
+            # Strong β, γ so the geodesic actually swerves around the IADS ring.
+            # Default (β=1.5, γ=2.0) is a research-grade prior; for the demo we
+            # want the curving to be visible at scenario scale.
+            from sargvision_swarm.core.riemannian import MetricParams
+            self.chanakya_params = ChanakyaParams(
+                metric=MetricParams(beta=12.0, gamma=3.0),
+            )
             self.chanakya_targets = np.stack([
                 np.array([xs[i], 32.0, 6.0], dtype=float) for i in range(n)
             ])
@@ -328,6 +349,22 @@ class LiveSession:
                 if d.battery < 0.20 and not self.current_task.get(i, "").startswith("RTB"):
                     self.current_task[i] = "RTB · LOW BATTERY"
                     self.intents[i] = "rtb"
+        elif self.plan.scenario == "migration" and self.migration_field is not None:
+            # GOVERNED MIGRATION — each drone picks its corridor independently
+            # based on hazard cost + zone occupancy + distance.
+            self.migration_field.step(positions, dt=0.1, t=float(self.swarm.t))
+            per_goal = np.stack(
+                [
+                    self.migration_field.goal_for_drone(i, positions[i])
+                    for i in range(positions.shape[0])
+                ]
+            )
+            slot_pull = (per_goal - positions) * 0.9 - velocities * 0.4
+            v_cmd = bvc_safe_velocity(positions, slot_pull, safety_radius=1.2, dt=0.1)
+            # Task labels reflect current corridor + assignment.
+            for i in range(positions.shape[0]):
+                zid = self.migration_field.assignment.get(i, "?")
+                self.current_task[i] = f"MIGRATE → {zid}"
         elif self.plan.scenario == "sead_ingress" and self.chanakya_state is not None:
             # CHANAKYA: plan geodesics across the threat manifold on first call
             # (or whenever the defense field is dirty), then follow waypoints.
@@ -799,6 +836,10 @@ class LiveSession:
 
         # Record RecentMessage for renderer
         for m in result.new_messages:
+            # BFT / Raft voter IDs can exceed n_drones (K=7 ring even for small swarms);
+            # skip those for renderer overlay.
+            if not (0 <= m.src < self.n_drones):
+                continue
             src_xy = (float(self.swarm.drones[m.src].pos[0]), float(self.swarm.drones[m.src].pos[1]))
             if m.dst is not None and 0 <= m.dst < self.n_drones:
                 dst_xy = (float(self.swarm.drones[m.dst].pos[0]), float(self.swarm.drones[m.dst].pos[1]))
