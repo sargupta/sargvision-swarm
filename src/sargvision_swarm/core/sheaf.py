@@ -44,9 +44,13 @@ def loyalty_from_positions(
         state.init(n)
     p = params or SheafParams()
 
-    # ── Each drone's "centroid estimate" (loyal = truth + noise; spoofed = + bias)
+    # ── Each drone's report in a COMMON frame (the swarm-centroid estimate).
+    # Loyal drones report `centroid + noise`; spoofed drones add a large bias.
+    # Reports must be in a common frame for sheaf disagreement to be meaningful —
+    # restriction maps in a real cellular sheaf transform local frames into
+    # the global frame; here we model that translation as already applied.
     rng = np.random.default_rng()
-    truth = positions.mean(axis=0) - positions   # (N, 3) vector to centroid
+    truth = np.tile(positions.mean(axis=0), (n, 1))    # (N, 3) — same centroid
     noise = rng.normal(scale=p.sigma_n * 0.3, size=truth.shape)
     reports = truth + noise
     if spoofed_ids:
@@ -56,16 +60,20 @@ def loyalty_from_positions(
                 bias = bias / (np.linalg.norm(bias) + 1e-9) * p.spoof_bias_m
                 reports[sid] = reports[sid] + bias
 
-    # ── Dirichlet residual: per drone, sum of disagreements with neighbours
+    # ── Dirichlet residual: per drone, MEDIAN edge disagreement.
+    # Median (vs L2 of sum) is robust to a minority of spoofed neighbours —
+    # a loyal vertex with k bad neighbours out of N still reads ~noise floor
+    # so long as k < N/2. The bad vertex itself disagrees with EVERY loyal
+    # neighbour and its median stays high.
     residual = np.zeros(n)
-    deg = adjacency.sum(axis=1).astype(np.float64)
     for i in range(n):
         nbrs = np.where(adjacency[i])[0]
         if len(nbrs) == 0:
             residual[i] = 0.0
             continue
-        diffs = reports[i] - reports[nbrs]
-        residual[i] = float(np.linalg.norm(diffs.sum(axis=0)) / np.sqrt(len(nbrs)))
+        diffs = reports[i] - reports[nbrs]            # (k, 3)
+        edge_mag = np.linalg.norm(diffs, axis=1)       # (k,)
+        residual[i] = float(np.median(edge_mag))
 
     # ── Loyalty = Gaussian on residual, EMA-smoothed across ticks
     raw_loyalty = np.exp(-(residual ** 2) / (2.0 * p.sigma_n ** 2))

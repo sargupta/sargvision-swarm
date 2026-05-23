@@ -104,7 +104,7 @@ def threat_class(posterior: np.ndarray) -> str:
     return THREAT_CLASSES[int(np.argmax(posterior))]
 
 
-def shield_assign(
+def shield_priorities(
     friendly_positions: np.ndarray,
     friendly_roles: list,
     hostiles: list,
@@ -112,12 +112,18 @@ def shield_assign(
     state: ShieldState,
     params: ShieldParams | None = None,
     spoofed_ids: set[int] | None = None,
-    already_assigned: dict[int, int] | None = None,
-) -> dict[int, int]:
-    """Run SHIELD tick and return assignment {friendly_id: hostile_id}.
+) -> tuple[np.ndarray, list[int], list[int]]:
+    """Run a SHIELD tick and return the per-pair priority matrix.
 
-    Strikers (role 'worker') bid on TERMINAL hostiles. Bids are weighted by
-    trust × expected damage / distance^alpha. Highest bid per hostile wins.
+    Returns (E, friendly_indices, hostile_ids) where
+      E[i, j] = trust[i] * E[damage(θ_j)] / dist(i, j)^α
+    is zero for non-strikers, kill-switched bidders, and non-TERMINAL
+    hostiles. SHIELD state (loyalty / trust / posteriors) is updated in
+    place.
+
+    This is the building block VAJRA composes on top of — VAJRA takes
+    E and adds Voronoi-hysteresis ownership + tropical-attention
+    resolution under jamming-aware concurrency.
     """
     from sargvision_swarm.core.sheaf import (
         loyalty_from_positions, SheafState, SheafParams,
@@ -144,10 +150,9 @@ def shield_assign(
         damping=p.pagerank_damping, iters=p.pagerank_iters,
     )
 
-    # ── 3. Update posteriors for each visible hostile
-    for h in hostiles:
-        if not h.alive:
-            continue
+    # ── 3. Update posteriors for every alive hostile
+    eligible_hostiles = [h for h in hostiles if h.alive]
+    for h in eligible_hostiles:
         obs = {
             "rcs": getattr(h, "rcs", 0.5),
             "rf_emit": getattr(h, "rf_emit", 0.5),
@@ -156,33 +161,67 @@ def shield_assign(
         }
         update_threat_posterior(state, h.id, obs)
 
-    # ── 4. Build bids and resolve auction
-    bids: list[tuple[float, int, int]] = []  # (priority, friendly_id, hostile_id)
-    already_assigned = already_assigned or {}
-    for h in hostiles:
-        if not h.alive or h.intent_label != "TERMINAL":
-            continue
-        if h.id in already_assigned.values():
-            continue
+    # ── 4. Build priority matrix over (strikers × TERMINAL hostiles).
+    terminal_hostiles = [h for h in eligible_hostiles if h.intent_label == "TERMINAL"]
+    m = len(terminal_hostiles)
+    E = np.zeros((n, m), dtype=np.float64)
+    hostile_ids = [h.id for h in terminal_hostiles]
+    for j, h in enumerate(terminal_hostiles):
         post = state.posteriors.get(h.id, PRIOR.copy())
         e_dmg = expected_damage(post, p)
         for i, role in enumerate(friendly_roles):
             if role != "worker":
                 continue
-            if i in already_assigned:
-                continue
             if state.trust[i] < p.trust_kill_threshold:
-                continue  # don't trust this drone's bid
+                continue
             d = float(np.linalg.norm(friendly_positions[i] - h.pos))
-            priority = state.trust[i] * e_dmg / (d ** p.distance_falloff + 1e-6)
-            bids.append((priority, i, h.id))
+            E[i, j] = state.trust[i] * e_dmg / (d ** p.distance_falloff + 1e-6)
+    return E, list(range(n)), hostile_ids
 
-    # Greedy resolve: highest priority first, one drone per hostile
+
+def shield_assign(
+    friendly_positions: np.ndarray,
+    friendly_roles: list,
+    hostiles: list,
+    adjacency: np.ndarray,
+    state: ShieldState,
+    params: ShieldParams | None = None,
+    spoofed_ids: set[int] | None = None,
+    already_assigned: dict[int, int] | None = None,
+) -> dict[int, int]:
+    """Run SHIELD tick and return assignment {friendly_id: hostile_id}.
+
+    Greedy resolution of the priority matrix — kept for callers that don't
+    want VAJRA's Voronoi + tropical attention layer.
+    """
+    E, friendly_ids, hostile_ids = shield_priorities(
+        friendly_positions, friendly_roles, hostiles, adjacency,
+        state, params, spoofed_ids,
+    )
+    already_assigned = already_assigned or {}
+
+    # Mask out already-assigned friendlies + hostiles.
+    if E.size == 0:
+        return {}
+    for i in already_assigned.keys():
+        if 0 <= i < E.shape[0]:
+            E[i, :] = 0.0
+    for hid in already_assigned.values():
+        if hid in hostile_ids:
+            j = hostile_ids.index(hid)
+            E[:, j] = 0.0
+
+    # Greedy resolve: highest priority first, one drone per hostile.
+    bids: list[tuple[float, int, int]] = []
+    for i in range(E.shape[0]):
+        for j in range(E.shape[1]):
+            if E[i, j] > 0:
+                bids.append((float(E[i, j]), i, hostile_ids[j]))
     bids.sort(reverse=True)
     used_friend: set[int] = set()
     used_host: set[int] = set()
     assignment: dict[int, int] = {}
-    for prio, fid, hid in bids:
+    for _prio, fid, hid in bids:
         if fid in used_friend or hid in used_host:
             continue
         assignment[fid] = hid

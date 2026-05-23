@@ -32,8 +32,24 @@ from sargvision_swarm.orchestrator.shield import (
     ShieldParams,
     ShieldState,
     expected_damage,
-    shield_assign,
+    shield_priorities,
     threat_class,
+)
+from sargvision_swarm.orchestrator.maya import (
+    MayaParams,
+    MayaState,
+    maya_tick,
+    posture_dict,
+)
+from sargvision_swarm.orchestrator.sheshnag import (
+    SheshnagParams,
+    SheshnagState,
+    sheshnag_tick,
+)
+from sargvision_swarm.orchestrator.vajra import (
+    VajraParams,
+    VajraState,
+    vajra_assign,
 )
 from sargvision_swarm.sim import SimConfig, SimpleSim
 from sargvision_swarm.sim.hostiles import HostileFleet
@@ -165,6 +181,27 @@ class LiveSession:
         self.shield_decoy_skipped: int = 0
         self.shield_kill_switched: set[int] = set()
 
+        # VAJRA state + params (Voronoi hysteresis, tropical attention, fragmentation).
+        self.vajra_state = VajraState()
+        self.vajra_params = VajraParams()
+        self.fragmentation_alarmed: bool = False
+
+        # MAYA — strategic posture solver (recomputes every ~30 s sim-time).
+        self.maya_state = MayaState()
+        self.maya_params = MayaParams()
+        self.maya_last_posture_log: float = -1e9
+
+        # SHESHNAG — offensive psyops layer. Authorisation gated through SwarmRaft.
+        self.sheshnag_state = SheshnagState()
+        self.sheshnag_params = SheshnagParams()
+        # Per-hostile panic state lives ON the hostile dataclass; this is the
+        # working vector used by sheshnag_tick each call.
+        self.panic_vector: np.ndarray = np.zeros(0)
+        # Console toggle: when ON, swarm proposes a BFT vote authorising
+        # SHESHNAG broadcasts; without authorisation, only SIR decay runs.
+        self.sheshnag_armed: bool = False
+        self.sheshnag_bft_voted: bool = False
+
     # ── Public API ─────────────────────────────────────────────────────
 
     def step(self) -> TickResult:
@@ -238,16 +275,56 @@ class LiveSession:
                 self.spoofed_ids = set()
 
             friendly_roles = [d.role.value for d in self.swarm.drones]
-            shield_new = shield_assign(
+            adj = self.comm_adjacency()
+            # ── SHIELD computes the trust-weighted Bayesian priority matrix ──
+            priority_E, friendly_ids, hostile_ids_active = shield_priorities(
                 friendly_positions=self.swarm.positions,
                 friendly_roles=friendly_roles,
                 hostiles=self.hostile_fleet.hostiles,
-                adjacency=self.comm_adjacency(),
+                adjacency=adj,
                 state=self.shield_state,
                 params=self.shield_params,
                 spoofed_ids=self.spoofed_ids if self.spoofed_ids else None,
+            )
+            # ── VAJRA resolves with Voronoi hysteresis + tropical attention ──
+            hostile_pos_active = np.array(
+                [
+                    next(h.pos for h in self.hostile_fleet.hostiles if h.id == hid)
+                    for hid in hostile_ids_active
+                ]
+            ) if hostile_ids_active else np.zeros((0, 3))
+            # Jamming flag in the console flows directly into HSL-CC concurrency cap.
+            self.vajra_params.jamming_factor = 0.5 if self.jamming else 0.0
+            shield_new = vajra_assign(
+                priority_matrix=priority_E,
+                friendly_positions=self.swarm.positions,
+                friendly_ids=friendly_ids,
+                hostile_positions=hostile_pos_active,
+                hostile_ids=hostile_ids_active,
+                adjacency=adj,
+                state=self.vajra_state,
+                params=self.vajra_params,
                 already_assigned=self.intercept_assignment,
             )
+
+            # Fragmentation alarm — only emit on edge.
+            if (
+                self.vajra_state.n_components > 1
+                and not self.fragmentation_alarmed
+            ):
+                self.fragmentation_alarmed = True
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  ⚠  VAJRA FRAGMENTATION — comm graph split into "
+                    f"{self.vajra_state.n_components} components (λ₂={self.vajra_state.lambda2:.3f})"
+                )
+            elif (
+                self.vajra_state.n_components == 1
+                and self.fragmentation_alarmed
+            ):
+                self.fragmentation_alarmed = False
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  ✓  VAJRA comm graph reconnected (λ₂={self.vajra_state.lambda2:.3f})"
+                )
 
             # Surface newly kill-switched drones (trust < threshold).
             killed_now = {
@@ -287,6 +364,111 @@ class LiveSession:
                 post = self.shield_state.posteriors.get(h.id)
                 if post is not None and threat_class(post) == "decoy":
                     self.shield_decoy_skipped += 1
+
+            # ── MAYA strategic posture refresh (every ~30 s) ──
+            posteriors_alive = [
+                self.shield_state.posteriors[h.id]
+                for h in self.hostile_fleet.hostiles
+                if h.alive and h.id in self.shield_state.posteriors
+            ]
+            did_solve, sol = maya_tick(
+                sim_time=float(t),
+                state=self.maya_state,
+                hostile_posteriors=posteriors_alive,
+                params=self.maya_params,
+            )
+            if did_solve and sol is not None:
+                pd = posture_dict(sol.posture)
+                top = max(pd, key=pd.get)
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  🧠 MAYA posture: {top.upper()} "
+                    f"({pd[top]*100:.0f}%) — value={sol.value:.2f} "
+                    f"μ̂_H={dict(zip(['dec','kin','nui'], np.round(self.maya_state.hostile_posterior, 2)))}"
+                )
+                # Modulate downstream SHIELD/VAJRA params per posture.
+                # INTERCEPT-heavy → sharper tropical attention + lower kill-switch
+                # DEFEND-heavy   → wider Voronoi margin (commit to your cell)
+                # RETREAT-heavy  → looser tropical to spread thin
+                self.vajra_params.tropical_beta = 4.0 + 12.0 * pd["intercept"]
+                self.vajra_params.voronoi_margin = 1.0 + 2.0 * pd["defend"]
+                self.shield_params.trust_kill_threshold = max(
+                    0.15, 0.25 - 0.10 * pd["intercept"]
+                )
+
+            # ── SHESHNAG offensive psyops tick ──
+            # Init panic vector when fleet first becomes non-empty.
+            n_h = len(self.hostile_fleet.hostiles)
+            if self.panic_vector.shape[0] != n_h:
+                self.panic_vector = np.array(
+                    [h.panic_level for h in self.hostile_fleet.hostiles]
+                )
+            # If user armed SHESHNAG and we haven't taken the BFT vote yet, do it.
+            if self.sheshnag_armed and not self.sheshnag_bft_voted:
+                self.sheshnag_bft_voted = True
+                passed, votes = self.raft.propose("authorize_psyops:sheshnag_broadcast")
+                for v in votes:
+                    m = WireMessage.make(
+                        src=v.voter_id,
+                        protocol=Protocol.BFT,
+                        topic="bft/swarm-raft/vote",
+                        payload=v,
+                        t=t,
+                    )
+                    result.new_messages.append(m)
+                self.bft_flash = {v.voter_id for v in votes}
+                self.bft_flash_ttl = 14
+                self.bft_count += 1
+                self.bft_history.append({
+                    "t": float(t),
+                    "proposal": "authorize_psyops:sheshnag_broadcast",
+                    "passed": bool(passed),
+                    "yes": sum(1 for v in votes if v.decision == "yes"),
+                    "no": sum(1 for v in votes if v.decision == "no"),
+                    "voters": [int(v.voter_id) for v in votes],
+                    "byzantine": [],
+                })
+                if passed:
+                    self.sheshnag_state.authorized = True
+                    result.event_log_lines.append(
+                        f"t={t:.2f}s  🐍 SHESHNAG AUTHORIZED — psyops broadcasts ENABLED"
+                    )
+                else:
+                    result.event_log_lines.append(
+                        f"t={t:.2f}s  🛑 SHESHNAG denied — BFT vote failed"
+                    )
+            elif not self.sheshnag_armed and self.sheshnag_state.authorized:
+                # Disarm
+                self.sheshnag_state.authorized = False
+                self.sheshnag_bft_voted = False
+
+            alive_hostiles = [h for h in self.hostile_fleet.hostiles if h.alive]
+            if alive_hostiles:
+                pos = np.array([h.pos for h in alive_hostiles])
+                vel = np.array([h.vel for h in alive_hostiles])
+                panic_in = np.array([h.panic_level for h in alive_hostiles])
+                panic_out = sheshnag_tick(
+                    hostile_positions=pos,
+                    hostile_velocities=vel,
+                    panic=panic_in,
+                    dt=self.sim.cfg.dt,
+                    state=self.sheshnag_state,
+                    params=self.sheshnag_params,
+                )
+                for h, p in zip(alive_hostiles, panic_out):
+                    h.panic_level = float(p)
+                # Surface phase transition when SHESHNAG tips the enemy.
+                phase = self.sheshnag_state.last_phase["phase"]
+                if phase == "MILLING" and self.sheshnag_state.fraction_panicked > 0.4:
+                    if not getattr(self, "_milling_alarmed", False):
+                        self._milling_alarmed = True
+                        result.event_log_lines.append(
+                            f"t={t:.2f}s  🌀 SHESHNAG ENEMY MILLING — "
+                            f"P={self.sheshnag_state.last_phase['P']:.2f} "
+                            f"R={self.sheshnag_state.last_phase['R']:.2f} "
+                            f"panic_mean={self.sheshnag_state.mean_panic:.2f}"
+                        )
+                elif phase != "MILLING":
+                    self._milling_alarmed = False
 
             # ── Record kill events ──
             for kill in tick["kills_this_step"]:
@@ -545,6 +727,35 @@ class LiveSession:
             "spoofed_ids": sorted(self.spoofed_ids),
             "decoys_skipped": int(self.shield_decoy_skipped),
         }
+        # VAJRA aggregate telemetry
+        vajra = {
+            "lambda2": float(self.vajra_state.lambda2),
+            "n_components": int(self.vajra_state.n_components),
+            "fragmented": bool(self.fragmentation_alarmed),
+            "jamming_factor": float(self.vajra_params.jamming_factor),
+            "voronoi_owners": dict(self.vajra_state.voronoi.owner),
+            "handover_events": list(self.vajra_state.handover_events[-10:]),
+        }
+        # MAYA strategic posture
+        maya = {
+            "posture": posture_dict(self.maya_state.posture),
+            "hostile_estimate": self.maya_state.hostile_posterior.tolist(),
+            "hostile_worst_case": self.maya_state.worst_case_hostile.tolist(),
+            "classifier_entropy": float(self.maya_state.classifier_entropy),
+            "value": float(self.maya_state.last_value),
+            "n_solves": int(self.maya_state.n_solves),
+        }
+        # SHESHNAG psyops telemetry
+        sheshnag = {
+            "authorized": bool(self.sheshnag_state.authorized),
+            "phase": self.sheshnag_state.last_phase.get("phase", "SWARM"),
+            "polarization": float(self.sheshnag_state.last_phase.get("P", 0.0)),
+            "rotation": float(self.sheshnag_state.last_phase.get("R", 0.0)),
+            "mean_panic": float(self.sheshnag_state.mean_panic),
+            "fraction_panicked": float(self.sheshnag_state.fraction_panicked),
+            "broadcasts_emitted": int(self.sheshnag_state.broadcasts_emitted),
+            "composite_value": float(self.sheshnag_state.composite_value),
+        }
         return {
             "t": now,
             "total_msgs": total_msgs,
@@ -553,6 +764,9 @@ class LiveSession:
             "cbba_count": self.cbba_count,
             "by_proto": by_proto,
             "shield": shield,
+            "vajra": vajra,
+            "maya": maya,
+            "sheshnag": sheshnag,
         }
 
     def floating_for_render(self) -> list[FloatingEvent]:

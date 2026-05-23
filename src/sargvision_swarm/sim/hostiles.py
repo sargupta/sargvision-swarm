@@ -44,6 +44,7 @@ class Hostile:
     rcs: float = 0.5                # noisy observable
     rf_emit: float = 0.5            # noisy observable
     traj_jerk: float = 0.2          # rolling jitter signal
+    panic_level: float = 0.0        # SIR-style fear contagion I_j ∈ [0, 1]
     _prev_vel: np.ndarray | None = None
 
 
@@ -145,6 +146,14 @@ class HostileFleet:
             n = float(np.linalg.norm(to_center))
             if n > 0.1:
                 desired = (to_center / n) * self.cruise_speed_ms
+                # Panicked hostiles deviate perpendicular to inbound vector,
+                # producing the milling-vortex circulation Couzin-Krause predicts.
+                if h.panic_level > 0.2:
+                    perp = np.array([-to_center[1], to_center[0], 0.0])
+                    perp_norm = float(np.linalg.norm(perp))
+                    if perp_norm > 1e-6:
+                        perp = perp / perp_norm * self.cruise_speed_ms
+                        desired = (1.0 - h.panic_level) * desired + h.panic_level * perp
                 # blend
                 h.vel = 0.85 * h.vel + 0.15 * desired
             # Class-driven jitter: decoys + nuisance wobble; kinetics fly straight.

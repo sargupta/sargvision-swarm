@@ -227,6 +227,30 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                     "alt_m": float(k["pos"][2]),
                 }
             )
+    # ── VAJRA aggregate telemetry (Voronoi hysteresis + algebraic connectivity) ──
+    vajra_state = getattr(session, "vajra_state", None)
+    vajra_params = getattr(session, "vajra_params", None)
+    vajra_summary: dict[str, Any] | None = None
+    if vajra_state is not None:
+        owners = getattr(getattr(vajra_state, "voronoi", None), "owner", {}) or {}
+        vajra_summary = {
+            "lambda2": float(getattr(vajra_state, "lambda2", 0.0)),
+            "n_components": int(getattr(vajra_state, "n_components", 1)),
+            "fragmented": bool(getattr(session, "fragmentation_alarmed", False)),
+            "fragmentation_threshold": float(
+                getattr(vajra_params, "fragmentation_threshold", 1e-3)
+                if vajra_params is not None
+                else 1e-3
+            ),
+            "jamming_factor": float(
+                getattr(vajra_params, "jamming_factor", 0.0) if vajra_params is not None else 0.0
+            ),
+            "voronoi_owners": {int(k): int(v) for k, v in owners.items()},
+            "handover_count": len(getattr(vajra_state, "handover_events", []) or []),
+            "n_friendlies": int(session.swarm.n),
+            "n_hostiles_alive": int(threat["remaining"]) if threat else 0,
+        }
+
     # ── SHIELD aggregate summary surfaced to console ──
     loyal_n = sum(1 for d in drones if d["shield_class"] == "loyal")
     suspect_n = sum(1 for d in drones if d["shield_class"] == "suspect")
@@ -260,6 +284,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         "cbba_events": cbba_events,
         "kill_events": kill_events,
         "shield": shield_summary,
+        "vajra": vajra_summary,
         "stats": stats,
         "flags": {
             "jamming": bool(getattr(session, "jamming", False)),
