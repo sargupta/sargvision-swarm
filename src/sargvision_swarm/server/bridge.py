@@ -289,9 +289,24 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                     "pulse_phase": float(h.pulse_phase),
                 }
             )
+        # Drone trails — convert sim coords to lon/lat per point
+        trails_payload: list[dict] = []
+        now_t = float(session.swarm.t)
+        for did, pts in migration_field.trails.items():
+            if not pts or len(pts) < 2:
+                continue
+            geo_pts = []
+            for (sx, sy) in pts[-40:]:  # cap to last 40 to keep payload small
+                glon, glat = _mig_l2g(float(sx), float(sy))
+                geo_pts.append([glon, glat])
+            trails_payload.append({"id": int(did), "path": geo_pts})
+
+        throughput = migration_field.throughput_per_min(now_t, window_s=60.0)
         migration_summary = {
             "zones": zones_payload,
             "hazards": hazards_payload,
+            "trails": trails_payload,
+            "throughput_per_min": throughput,
             "completed_loops": int(migration_field.completed_loops),
             "violations": int(migration_field.violations),
             "collisions": int(migration_field.collisions),

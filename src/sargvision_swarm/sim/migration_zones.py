@@ -76,6 +76,13 @@ class GovernedMigrationField:
     # Drones who completed full loop (start → corridors → end → return)
     completed_loops: int = 0
     last_zone_of: dict[int, str] = field(default_factory=dict)
+    # Per-drone trail of recent (x, y) sim positions for the console PathLayer.
+    trails: dict[int, list[tuple[float, float]]] = field(default_factory=dict)
+    trail_max: int = 60
+    # Zone-entry events for throughput calculation — (t, zone_id, drone_id) tuples.
+    entry_events: list[tuple[float, str, int]] = field(default_factory=list)
+    # Storm centre velocities (sim m/s) for slow drift.
+    storm_vel: dict[str, tuple[float, float]] = field(default_factory=dict)
 
     @classmethod
     def build_ladakh(cls) -> GovernedMigrationField:
@@ -176,24 +183,58 @@ class GovernedMigrationField:
         back through the loop (turns around for return leg) — keeps the
         scenario going indefinitely.
         """
-        # Pulse storms (visual breathing)
+        # Pulse storms (visual breathing) + drift each storm centre slowly.
+        if not self.storm_vel:
+            # First call — assign each storm a small wander velocity
+            self.storm_vel = {
+                "STORM_N": (0.03, -0.02),
+                "SHEAR":   (0.04, 0.01),
+                "WX_E":    (-0.025, 0.018),
+            }
         for h in self.hazards:
             h.pulse_phase = (h.pulse_phase + dt * 0.7) % (2 * math.pi)
+            vx, vy = self.storm_vel.get(h.id, (0.0, 0.0))
+            cx, cy, cz = h.center
+            # Wander within a bounded box; reverse direction at edges
+            cx_new = cx + vx * dt
+            cy_new = cy + vy * dt
+            if abs(cx_new) > 14:
+                vx = -vx
+            if abs(cy_new) > 12:
+                vy = -vy
+            self.storm_vel[h.id] = (vx, vy)
+            h.center = (cx_new, cy_new, cz)
 
-        # Drift wind shear east-ward slowly so the scene is alive
-        for h in self.hazards:
-            if h.id == "SHEAR":
-                cx, cy, cz = h.center
-                h.center = (cx + math.sin(t * 0.15) * 0.05, cy, cz)
+        # Push trail history (decimate to every 2nd sample so we don't bloat)
+        if int(round(t * 10)) % 2 == 0:
+            for i, p in enumerate(drone_positions):
+                tr = self.trails.setdefault(i, [])
+                tr.append((float(p[0]), float(p[1])))
+                if len(tr) > self.trail_max:
+                    self.trails[i] = tr[-self.trail_max :]
 
-        # Determine inside-zone per drone (closest zone within radius)
+        # Determine inside-zone per drone (closest zone within radius) + emit
+        # entry events when a drone transitions into a new zone (for throughput).
         new_inside: dict[int, str] = {}
         for i, p in enumerate(drone_positions):
             zid = self.zone_at(p)
             if zid is not None:
                 new_inside[i] = zid
+                prev = self.inside.get(i)
+                if prev != zid:
+                    self.entry_events.append((t, zid, i))
+                    # Trim event log to last 5 minutes for throughput compute
+                    cutoff = t - 300.0
+                    if len(self.entry_events) > 2000:
+                        self.entry_events = [e for e in self.entry_events if e[0] >= cutoff]
                 self.last_zone_of[i] = zid
         self.inside = new_inside
+
+        # Count capacity violations — once per tick per overloaded zone
+        occ = self.occupancy()
+        for z in self.zones:
+            if occ.get(z.id, 0) > z.capacity:
+                self.violations += 1
 
         # Count cycle increments when a drone reaches END
         for i, zid in new_inside.items():
@@ -204,6 +245,17 @@ class GovernedMigrationField:
                 self.cycles[str(i)] = self.cycles.get(str(i), 0) + 1
             elif zid == "START" and self.assignment.get(i) == "START":
                 self.assignment[i] = "END"
+
+    def throughput_per_min(self, now_t: float, window_s: float = 60.0) -> dict[str, int]:
+        """Per-zone entries in the last `window_s` seconds."""
+        cutoff = now_t - window_s
+        counts: dict[str, int] = {z.id: 0 for z in self.zones}
+        for et, zid, _did in self.entry_events:
+            if et >= cutoff and zid in counts:
+                counts[zid] += 1
+        # Normalise to per-min
+        scale = 60.0 / max(window_s, 1e-6)
+        return {k: int(round(v * scale)) for k, v in counts.items()}
 
     def initial_assignments(self, n_drones: int) -> None:
         """At t=0 every drone is heading from START → END through some corridor."""
