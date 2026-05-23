@@ -18,7 +18,7 @@ class MissionGoal(BaseModel):
 
     goal_text: str
     n_drones: int
-    scenario: str = "flock"   # flock | formation_v | coverage | hover
+    scenario: str = "flock"   # flock | formation_v | coverage | hover | sead_ingress
 
 
 class TaskBundle(BaseModel):
@@ -106,6 +106,17 @@ class MissionPlanner:
                 goal_pos=[0.0, 0.0, 8.0],
                 bundles=self._coverage_bundles(goal.n_drones),
                 rationale="Distributed coverage — drones disperse to assigned cells.",
+            )
+        if scenario == "sead_ingress":
+            return MissionPlan(
+                scenario=scenario,
+                algorithm="chanakya_geodesic",
+                goal_pos=[0.0, 32.0, 6.0],
+                bundles=[
+                    TaskBundle(drone_id=i, role=Role.WORKER.value)
+                    for i in range(goal.n_drones)
+                ],
+                rationale="CHANAKYA Riemannian geodesic ingress across hostile IADS.",
             )
         # Default: hover in place
         return MissionPlan(

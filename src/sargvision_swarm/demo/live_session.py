@@ -6,6 +6,7 @@ Encapsulates the same physics + protocols as `runner.rollout()` but exposes
 
 from __future__ import annotations
 
+import math
 import random
 from collections import deque
 from dataclasses import dataclass, field
@@ -35,6 +36,13 @@ from sargvision_swarm.orchestrator.shield import (
     shield_priorities,
     threat_class,
 )
+from sargvision_swarm.orchestrator.chanakya import (
+    ChanakyaParams,
+    ChanakyaState,
+    chanakya_plan_swarm,
+    desired_velocity as chanakya_desired_velocity,
+    plan_summary as chanakya_summary,
+)
 from sargvision_swarm.orchestrator.maya import (
     MayaParams,
     MayaState,
@@ -52,6 +60,7 @@ from sargvision_swarm.orchestrator.vajra import (
     vajra_assign,
 )
 from sargvision_swarm.sim import SimConfig, SimpleSim
+from sargvision_swarm.sim.defense_field import DefenseField
 from sargvision_swarm.sim.hostiles import HostileFleet
 
 
@@ -63,6 +72,37 @@ def _default_task_for_role(role) -> str:
         "relay": "RELAY LINK",
         "worker": "STATION HOLD",
     }.get(name, "STATION HOLD")
+
+
+def _role_orbit_offset(t: float, drone_idx: int, role) -> np.ndarray:
+    """Per-role time-varying offset added to the drone's base slot so the
+    swarm VISIBLY orbits / patrols on the map even when idle.
+
+      LEADER  — small command orbit (r 1.5 m, period 28 s)
+      SCOUT   — racetrack (Lissajous-style 4.5 × 2 m, period 40 s)
+      RELAY   — mid-ring orbit (r 2.5 m, period 32 s)
+      WORKER  — tight cell orbit (r 1.2 m, period 18 s)
+
+    Each drone phase-shifts by its index so the swarm doesn't move in lockstep.
+    Returns a (3,) numpy vector with z = 0.
+    """
+    name = role.value if hasattr(role, "value") else str(role)
+    phase = float(drone_idx)
+    if name == "leader":
+        r, w = 1.5, 2 * math.pi / 28.0
+        return np.array([r * math.cos(w * t), r * math.sin(w * t), 0.0])
+    if name == "scout":
+        w = 2 * math.pi / 40.0
+        ang = w * t + phase
+        return np.array([4.5 * math.cos(ang), 2.0 * math.sin(ang * 2), 0.0])
+    if name == "relay":
+        r, w = 2.5, 2 * math.pi / 32.0
+        ang = w * t + phase
+        return np.array([r * math.cos(ang), r * math.sin(ang), 0.0])
+    # worker — tight cell orbit
+    r, w = 1.2, 2 * math.pi / 18.0
+    ang = w * t + phase
+    return np.array([r * math.cos(ang), r * math.sin(ang), 0.0])
 from sargvision_swarm.viz.live_frame import FloatingEvent, RecentMessage, TrailHistory
 
 
@@ -143,6 +183,36 @@ class LiveSession:
             self.hostile_fleet.spawn_initial(center=self.swarm.positions.mean(axis=0))
             self._hostile_first_contact_fired = False
 
+        # CHANAKYA SEAD-ingress scenario — friendlies cross a hostile IADS.
+        self.defense_field: DefenseField | None = None
+        self.chanakya_state: ChanakyaState | None = None
+        self.chanakya_params: ChanakyaParams | None = None
+        self.chanakya_targets: np.ndarray | None = None
+        self.chanakya_kills: int = 0
+        self.chanakya_arrivals: int = 0
+        if scenario == "sead_ingress":
+            # Friendlies spawn on the south edge, targets on the north edge,
+            # with a 4-radar IADS ring guarding the centre.
+            n = n_drones
+            ys = np.full(n, -32.0) + np.linspace(-3.0, 3.0, n)
+            xs = np.linspace(-12.0, 12.0, n)
+            zs = np.full(n, 6.0)
+            for i, d in enumerate(self.swarm.drones):
+                d.pos = np.array([xs[i], ys[i], zs[i]], dtype=float)
+                d.vel = np.zeros(3)
+            self.defense_field = DefenseField(seed=(seed or 0) + 11)
+            self.defense_field.spawn_iads_layout(
+                centre=np.array([0.0, 0.0, 4.0]),
+                ring_radius=14.0,
+                n_radars=4,
+                engagement_radius=5.5,
+            )
+            self.chanakya_state = ChanakyaState()
+            self.chanakya_params = ChanakyaParams()
+            self.chanakya_targets = np.stack([
+                np.array([xs[i], 32.0, 6.0], dtype=float) for i in range(n)
+            ])
+
         # Role distribution — make this look like a real ORBAT.
         # 1 LEADER + 4 SCOUTS + 4 RELAYS + rest STRIKERS (WORKER).
         from sargvision_swarm.core.state import Role as _Role
@@ -221,13 +291,23 @@ class LiveSession:
             per_goal = np.array(
                 [b.goal_pos if b.goal_pos else self.goal_pos.tolist() for b in self.plan.bundles]
             )
+            # ── Per-role ORBIT offset so drones VISIBLY fly patrol patterns ──
+            sim_t = float(self.swarm.t)
+            assigned = set(self.intercept_assignment.keys())
+            for i, d in enumerate(self.swarm.drones):
+                if i in assigned:
+                    continue
+                if d.battery < 0.20:
+                    # RTB: pull toward base origin instead of orbiting
+                    per_goal[i] = np.array([0.0, 0.0, 5.5])
+                    continue
+                per_goal[i] = per_goal[i] + _role_orbit_offset(sim_t, i, d.role)
             # If a drone is assigned to intercept a hostile, override its slot.
             if self.hostile_fleet is not None:
                 hostile_by_id = {h.id: h for h in self.hostile_fleet.hostiles}
                 for friendly_id, hostile_id in list(self.intercept_assignment.items()):
                     h = hostile_by_id.get(hostile_id)
                     if h is None or not h.alive:
-                        # release this interceptor
                         self.intercept_assignment.pop(friendly_id, None)
                         self.current_task[friendly_id] = _default_task_for_role(
                             self.swarm.drones[friendly_id].role
@@ -241,6 +321,36 @@ class LiveSession:
                     pull_gain[friendly_id] = 3.0
             slot_pull = (per_goal - positions) * pull_gain[:, None] - velocities * 0.5
             v_cmd = bvc_safe_velocity(positions, slot_pull, safety_radius=1.0, dt=0.1)
+            # ── Battery drain + RTB intent on low battery ──
+            for i, d in enumerate(self.swarm.drones):
+                drain = 0.0006 + (0.0014 if i in assigned else 0.0)
+                d.battery = max(0.0, d.battery - drain)
+                if d.battery < 0.20 and not self.current_task.get(i, "").startswith("RTB"):
+                    self.current_task[i] = "RTB · LOW BATTERY"
+                    self.intents[i] = "rtb"
+        elif self.plan.scenario == "sead_ingress" and self.chanakya_state is not None:
+            # CHANAKYA: plan geodesics across the threat manifold on first call
+            # (or whenever the defense field is dirty), then follow waypoints.
+            if self.defense_field is not None and (
+                not self.chanakya_state.plans or self.defense_field.consume_dirty()
+            ):
+                chanakya_plan_swarm(
+                    swarm_positions=positions,
+                    targets=self.chanakya_targets,
+                    defense_field=self.defense_field.active,
+                    state=self.chanakya_state,
+                    params=self.chanakya_params,
+                )
+            v_cmd = np.zeros_like(positions)
+            for i in range(positions.shape[0]):
+                v_cmd[i] = chanakya_desired_velocity(
+                    drone_idx=i,
+                    drone_pos=positions[i],
+                    state=self.chanakya_state,
+                    params=self.chanakya_params,
+                    cruise_speed=1.4,
+                )
+            v_cmd = bvc_safe_velocity(positions, v_cmd, safety_radius=1.0, dt=0.1)
         elif self.plan.scenario == "hover":
             v_cmd = (self.goal_pos - positions) * 1.0 - velocities * 0.8
         else:
@@ -252,6 +362,34 @@ class LiveSession:
         # Update trails
         for d in self.swarm.drones:
             self.trails.push(d.id, float(d.pos[0]), float(d.pos[1]))
+
+        # ── CHANAKYA scenario bookkeeping ─────────────────────────
+        if self.defense_field is not None and self.chanakya_state is not None:
+            hit_mask = self.defense_field.kill_radius_check(self.swarm.positions)
+            new_kills = 0
+            for i, hit in enumerate(hit_mask):
+                d = self.swarm.drones[i]
+                if hit and d.healthy:
+                    d.healthy = False
+                    new_kills += 1
+            if new_kills:
+                self.chanakya_kills += new_kills
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  💀 CHANAKYA — {new_kills} drone(s) lost inside SAM radius"
+                )
+            # Arrivals = drones whose waypoint queue is exhausted.
+            for i in range(self.swarm.n):
+                plan = self.chanakya_state.plans.get(i)
+                if plan is None:
+                    continue
+                k = self.chanakya_state.next_waypoint_idx.get(i, 0)
+                if k >= plan.waypoints.shape[0]:
+                    if not getattr(self.swarm.drones[i], "_chanakya_arrived", False):
+                        self.swarm.drones[i]._chanakya_arrived = True
+                        self.chanakya_arrivals += 1
+                        result.event_log_lines.append(
+                            f"t={t:.2f}s  ✅ CHANAKYA DRN-{self.swarm.drones[i].id:03d} reached target"
+                        )
 
         # ── Hostile fleet ───────────────────────────────────────────
         if self.hostile_fleet is not None:
@@ -745,6 +883,15 @@ class LiveSession:
             "value": float(self.maya_state.last_value),
             "n_solves": int(self.maya_state.n_solves),
         }
+        # CHANAKYA SEAD-ingress telemetry
+        chanakya = {
+            "enabled": self.chanakya_state is not None,
+            "kills": int(self.chanakya_kills),
+            "arrivals": int(self.chanakya_arrivals),
+        }
+        if self.chanakya_state is not None:
+            chanakya.update(chanakya_summary(self.chanakya_state))
+            chanakya["n_active_assets"] = len(self.defense_field.active) if self.defense_field else 0
         # SHESHNAG psyops telemetry
         sheshnag = {
             "authorized": bool(self.sheshnag_state.authorized),
@@ -767,6 +914,7 @@ class LiveSession:
             "vajra": vajra,
             "maya": maya,
             "sheshnag": sheshnag,
+            "chanakya": chanakya,
         }
 
     def floating_for_render(self) -> list[FloatingEvent]:

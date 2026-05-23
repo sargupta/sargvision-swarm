@@ -17,6 +17,14 @@ from sargvision_swarm.orchestrator.shield import (
     update_threat_posterior,
 )
 from sargvision_swarm.orchestrator.swarm_raft import SwarmRaft
+from sargvision_swarm.orchestrator.chanakya import (
+    ChanakyaParams,
+    ChanakyaPlan,
+    ChanakyaState,
+    chanakya_plan_swarm,
+    desired_velocity as chanakya_desired_velocity,
+    plan_summary as chanakya_plan_summary,
+)
 from sargvision_swarm.orchestrator.maya import (
     HOSTILE_CLASSES,
     POSTURE_ACTIONS,
@@ -52,6 +60,9 @@ __all__ = [
     "MissionPlan",
     "MissionPlanner",
     "POSTURE_ACTIONS",
+    "ChanakyaParams",
+    "ChanakyaPlan",
+    "ChanakyaState",
     "CorrelatedSeeds",
     "MayaParams",
     "MayaSolution",
@@ -70,6 +81,9 @@ __all__ = [
     "algebraic_connectivity",
     "break_even_interceptors",
     "connected_components",
+    "chanakya_desired_velocity",
+    "chanakya_plan_summary",
+    "chanakya_plan_swarm",
     "expected_damage",
     "maya_tick",
     "posture_dict",

@@ -190,6 +190,12 @@ def vajra_assign(
     n, m = priority_matrix.shape
     already_assigned = already_assigned or {}
 
+    # Always refresh λ₂ + components — telemetry consumers (Gradio top-bar)
+    # show this even when no TERMINAL hostiles are pending assignment.
+    if adjacency.size > 0:
+        state.lambda2 = algebraic_connectivity(adjacency)
+        state.n_components = len(connected_components(adjacency))
+
     if n == 0 or m == 0:
         return {}
 
@@ -225,10 +231,8 @@ def vajra_assign(
     for j in used_hostiles:
         C[:, j] = 0.0
 
-    # ── 4.2 Fragmentation check ──
-    state.lambda2 = algebraic_connectivity(adjacency)
+    # ── 4.2 Per-component assignment ──
     components = connected_components(adjacency) if state.lambda2 < p.fragmentation_threshold else [set(range(n))]
-    state.n_components = len(components)
 
     # ── 4.3 Tropical attention per component ──
     assignment: dict[int, int] = {}
