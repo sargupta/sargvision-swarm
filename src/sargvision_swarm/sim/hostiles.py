@@ -18,6 +18,18 @@ from dataclasses import dataclass, field
 import numpy as np
 
 
+THREAT_MIX = (("decoy", 0.40), ("kinetic", 0.50), ("nuisance", 0.10))
+# Per-class observable signatures (rcs, rf_emit, traj_jerk_rate) — units 0..1.
+# decoy:    Luneburg lens inflates RCS, overpowered emitters, loiter jitter.
+# kinetic:  small RCS, mild emit, smooth ballistic.
+# nuisance: tiny RCS, minimal emit, drift.
+CLASS_SIGNATURE = {
+    "decoy":    {"rcs": 0.85, "rf_emit": 0.80, "jerk_rate": 0.70},
+    "kinetic":  {"rcs": 0.35, "rf_emit": 0.45, "jerk_rate": 0.15},
+    "nuisance": {"rcs": 0.10, "rf_emit": 0.10, "jerk_rate": 0.45},
+}
+
+
 @dataclass
 class Hostile:
     id: int
@@ -28,6 +40,11 @@ class Hostile:
     intent_label: str = "INBOUND"
     callsign: str = ""
     assigned_to: int | None = None  # drone_id of friendly intercepting
+    threat_class: str = "kinetic"   # ground truth (hidden from defender)
+    rcs: float = 0.5                # noisy observable
+    rf_emit: float = 0.5            # noisy observable
+    traj_jerk: float = 0.2          # rolling jitter signal
+    _prev_vel: np.ndarray | None = None
 
 
 @dataclass
@@ -61,6 +78,15 @@ class HostileFleet:
             bearing = (i / self.spawn_count) * 2 * math.pi + self._rng.uniform(-0.1, 0.1)
             self._spawn_one(center, bearing)
 
+    def _draw_threat_class(self) -> str:
+        r = self._rng.random()
+        cum = 0.0
+        for cls, w in THREAT_MIX:
+            cum += w
+            if r < cum:
+                return cls
+        return THREAT_MIX[-1][0]
+
     def _spawn_one(self, center: np.ndarray, bearing: float) -> None:
         offset = np.array(
             [
@@ -76,7 +102,11 @@ class HostileFleet:
         to_center[2] = 0.0
         norm = float(np.linalg.norm(to_center))
         vel = (to_center / max(norm, 1e-6)) * self.cruise_speed_ms
-        callsign = f"KAM-{self._next_id - 1000 + 1001:04d}"  # KAM-1001..
+        tcls = self._draw_threat_class()
+        sig = CLASS_SIGNATURE[tcls]
+        # Class-prefixed callsign so console can tell at-a-glance during dev.
+        prefix = {"decoy": "DEC", "kinetic": "KIN", "nuisance": "NUI"}[tcls]
+        callsign = f"{prefix}-{self._next_id - 1000 + 1001:04d}"
         self.hostiles.append(
             Hostile(
                 id=self._next_id,
@@ -84,6 +114,10 @@ class HostileFleet:
                 vel=vel.astype(float),
                 spawn_bearing_deg=math.degrees(bearing) % 360.0,
                 callsign=callsign,
+                threat_class=tcls,
+                rcs=float(np.clip(sig["rcs"] + self._rng.gauss(0, 0.05), 0.0, 1.0)),
+                rf_emit=float(np.clip(sig["rf_emit"] + self._rng.gauss(0, 0.05), 0.0, 1.0)),
+                traj_jerk=sig["jerk_rate"] * 0.5,
             )
         )
         self._next_id += 1
@@ -104,6 +138,7 @@ class HostileFleet:
         for h in self.hostiles:
             if not h.alive:
                 continue
+            prev_vel = h.vel.copy()
             # Recompute velocity toward center (slowly home in)
             to_center = center - h.pos
             to_center[2] = 0.0
@@ -112,7 +147,22 @@ class HostileFleet:
                 desired = (to_center / n) * self.cruise_speed_ms
                 # blend
                 h.vel = 0.85 * h.vel + 0.15 * desired
+            # Class-driven jitter: decoys + nuisance wobble; kinetics fly straight.
+            sig = CLASS_SIGNATURE.get(h.threat_class, CLASS_SIGNATURE["kinetic"])
+            wobble = sig["jerk_rate"]
+            h.vel = h.vel + np.array(
+                [
+                    self._rng.gauss(0, wobble * 0.25),
+                    self._rng.gauss(0, wobble * 0.25),
+                    0.0,
+                ]
+            )
             h.pos = h.pos + h.vel * dt
+            # Update rolling jerk + observation noise
+            dv = float(np.linalg.norm(h.vel - prev_vel))
+            h.traj_jerk = 0.8 * h.traj_jerk + 0.2 * min(dv * 2.0, 1.0)
+            h.rcs = float(np.clip(sig["rcs"] + self._rng.gauss(0, 0.04), 0.0, 1.0))
+            h.rf_emit = float(np.clip(sig["rf_emit"] + self._rng.gauss(0, 0.04), 0.0, 1.0))
 
             # Check engagement against any friendly
             diffs = friendly_positions - h.pos[None, :]

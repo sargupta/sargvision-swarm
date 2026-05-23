@@ -28,6 +28,13 @@ from sargvision_swarm.comms.protocols import IntentPayload
 from sargvision_swarm.core import ReflexParams, SwarmState, compose_reflex
 from sargvision_swarm.core.bvc import bvc_safe_velocity
 from sargvision_swarm.orchestrator import EDCBBA, MissionGoal, MissionPlanner, SwarmRaft, Task
+from sargvision_swarm.orchestrator.shield import (
+    ShieldParams,
+    ShieldState,
+    expected_damage,
+    shield_assign,
+    threat_class,
+)
 from sargvision_swarm.sim import SimConfig, SimpleSim
 from sargvision_swarm.sim.hostiles import HostileFleet
 
@@ -146,6 +153,17 @@ class LiveSession:
         # Live operational flags toggleable from the console.
         self.jamming: bool = False
         self.gnss_denied: bool = False
+        self.hijack_active: bool = False  # SHIELD demo: hijack 1–2 friendlies
+
+        # SHIELD state + params (built once, mutated in place across ticks)
+        self.shield_state = ShieldState()
+        self.shield_state.init(n_drones)
+        self.shield_params = ShieldParams()
+        # IDs of friendlies whose sensor stream is currently spoofed (for SHIELD demo).
+        self.spoofed_ids: set[int] = set()
+        # Recent SHIELD events surfaced to event log.
+        self.shield_decoy_skipped: int = 0
+        self.shield_kill_switched: set[int] = set()
 
     # ── Public API ─────────────────────────────────────────────────────
 
@@ -206,31 +224,69 @@ class LiveSession:
                 center=self.swarm.positions.mean(axis=0),
             )
 
-            # ── Assign interceptors for any TERMINAL hostile without one ──
-            free_strikers = [
-                d.id
-                for d in self.swarm.drones
-                if d.role.value == "worker" and d.id not in self.intercept_assignment
-            ]
-            for h in self.hostile_fleet.hostiles:
-                if not h.alive or h.intent_label != "TERMINAL":
-                    continue
-                if h.assigned_to is not None:
-                    continue
-                # Find nearest free striker.
-                if not free_strikers:
-                    break
-                pos_h = h.pos
-                nearest = min(
-                    free_strikers,
-                    key=lambda fid: float(
-                        np.linalg.norm(self.swarm.drones[fid].pos - pos_h)
-                    ),
+            # ── SHIELD trust-weighted Bayesian engagement assignment ──
+            # Hijack injection (demo toggle): corrupt 1-2 friendly sensor streams
+            # so the sheaf-Laplacian residual rises and PageRank trust collapses.
+            if self.hijack_active and not self.spoofed_ids:
+                self.spoofed_ids = set(
+                    self._rng.sample(range(self.n_drones), k=min(2, self.n_drones))
                 )
-                self.intercept_assignment[nearest] = h.id
-                h.assigned_to = nearest
-                self.current_task[nearest] = f"INTERCEPT {h.callsign}"
-                free_strikers.remove(nearest)
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  ⚠  HIJACK INJECT — friendlies {sorted(self.spoofed_ids)} sensor-spoofed"
+                )
+            elif not self.hijack_active and self.spoofed_ids:
+                self.spoofed_ids = set()
+
+            friendly_roles = [d.role.value for d in self.swarm.drones]
+            shield_new = shield_assign(
+                friendly_positions=self.swarm.positions,
+                friendly_roles=friendly_roles,
+                hostiles=self.hostile_fleet.hostiles,
+                adjacency=self.comm_adjacency(),
+                state=self.shield_state,
+                params=self.shield_params,
+                spoofed_ids=self.spoofed_ids if self.spoofed_ids else None,
+                already_assigned=self.intercept_assignment,
+            )
+
+            # Surface newly kill-switched drones (trust < threshold).
+            killed_now = {
+                i for i, T in enumerate(self.shield_state.trust)
+                if T < self.shield_params.trust_kill_threshold
+            }
+            newly_killed = killed_now - self.shield_kill_switched
+            for kid in sorted(newly_killed):
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  🛑 SHIELD KILL-SWITCH DRN-{self.swarm.drones[kid].id:03d} "
+                    f"(trust={self.shield_state.trust[kid]:.2f})"
+                )
+            self.shield_kill_switched = killed_now
+
+            # Apply new assignments + log a decoy-skip when SHIELD downgrades a target.
+            hostile_by_id = {h.id: h for h in self.hostile_fleet.hostiles}
+            for fid, hid in shield_new.items():
+                h = hostile_by_id.get(hid)
+                if h is None:
+                    continue
+                post = self.shield_state.posteriors.get(hid)
+                cls = threat_class(post) if post is not None else "?"
+                self.intercept_assignment[fid] = hid
+                h.assigned_to = fid
+                self.current_task[fid] = f"INTERCEPT {h.callsign} [{cls}]"
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  🎯 SHIELD DRN-{self.swarm.drones[fid].id:03d} → "
+                    f"{h.callsign} class={cls} "
+                    f"E[D]={expected_damage(post, self.shield_params):.2f} "
+                    f"trust={self.shield_state.trust[fid]:.2f}"
+                )
+
+            # Count decoys SHIELD chose NOT to engage despite being TERMINAL.
+            for h in self.hostile_fleet.hostiles:
+                if not h.alive or h.intent_label != "TERMINAL" or h.assigned_to is not None:
+                    continue
+                post = self.shield_state.posteriors.get(h.id)
+                if post is not None and threat_class(post) == "decoy":
+                    self.shield_decoy_skipped += 1
 
             # ── Record kill events ──
             for kill in tick["kills_this_step"]:
@@ -477,6 +533,18 @@ class LiveSession:
         total_msgs = len(self.message_log)
         msgs_per_s = sum(r["msgs_per_s"] for r in rates.values())
         by_proto = {p: int(r["total_msgs"]) for p, r in rates.items()}
+        # SHIELD aggregate telemetry
+        loyalty = self.shield_state.loyalty
+        trust = self.shield_state.trust
+        shield = {
+            "loyalty_min": float(loyalty.min()) if loyalty.size else 1.0,
+            "loyalty_mean": float(loyalty.mean()) if loyalty.size else 1.0,
+            "trust_min": float(trust.min()) if trust.size else 1.0,
+            "trust_mean": float(trust.mean()) if trust.size else 1.0,
+            "kill_switched": sorted(self.shield_kill_switched),
+            "spoofed_ids": sorted(self.spoofed_ids),
+            "decoys_skipped": int(self.shield_decoy_skipped),
+        }
         return {
             "t": now,
             "total_msgs": total_msgs,
@@ -484,6 +552,7 @@ class LiveSession:
             "bft_count": self.bft_count,
             "cbba_count": self.cbba_count,
             "by_proto": by_proto,
+            "shield": shield,
         }
 
     def floating_for_render(self) -> list[FloatingEvent]:
