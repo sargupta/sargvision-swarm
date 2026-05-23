@@ -353,9 +353,34 @@ class LiveSession:
             # GOVERNED MIGRATION — each drone picks its corridor independently
             # based on hazard cost + zone occupancy + distance.
             self.migration_field.step(positions, dt=0.1, t=float(self.swarm.t))
+            # Scenario-local hijack injection (counter-swarm has its own; migration
+            # gets its here so the HIJACK button works in this mission too).
+            if self.hijack_active and not self.spoofed_ids:
+                self.spoofed_ids = set(
+                    self._rng.sample(range(self.n_drones), k=min(3, self.n_drones))
+                )
+                result.event_log_lines.append(
+                    f"t={float(self.swarm.t):.2f}s  ⚠  HIJACK INJECT — friendlies {sorted(self.spoofed_ids)} sensor-spoofed"
+                )
+            elif not self.hijack_active and self.spoofed_ids:
+                self.spoofed_ids = set()
+
+            # Surface per-drone SHIELD class for corridor-access gating
+            spoofed = set(getattr(self, "spoofed_ids", set()) or set())
+            kill_switched = set(getattr(self, "shield_kill_switched", set()) or set())
+
+            def _shield_class_for(i: int) -> str | None:
+                if i in kill_switched:
+                    return "kill_switched"
+                if i in spoofed:
+                    return "hijacked"
+                return None
+
             per_goal = np.stack(
                 [
-                    self.migration_field.goal_for_drone(i, positions[i])
+                    self.migration_field.goal_for_drone(
+                        i, positions[i], shield_class=_shield_class_for(i)
+                    )
                     for i in range(positions.shape[0])
                 ]
             )
@@ -397,14 +422,22 @@ class LiveSession:
                 zid = self.migration_field.assignment.get(i, "?")
                 base = f"MIGRATE → {zid}"
                 prefix = ""
-                if in_weather[i]:
-                    prefix = "STORM · "
-                if self.gnss_denied and self.jamming:
-                    prefix = "DEGRADED · " + prefix
-                elif self.gnss_denied:
-                    prefix = "BLIND · " + prefix
-                elif self.jamming:
-                    prefix = "JAMMED · " + prefix
+                # SHIELD denial wins over everything
+                if i in kill_switched:
+                    prefix = "DENIED · KILL-SW · "
+                    base = "HOLD REST"
+                elif i in spoofed:
+                    prefix = "DENIED · HIJACK · "
+                    base = "REROUTE REST"
+                else:
+                    if in_weather[i]:
+                        prefix = "STORM · "
+                    if self.gnss_denied and self.jamming:
+                        prefix = "DEGRADED · " + prefix
+                    elif self.gnss_denied:
+                        prefix = "BLIND · " + prefix
+                    elif self.jamming:
+                        prefix = "JAMMED · " + prefix
                 self.current_task[i] = prefix + base
 
             # Battery drain accelerated when degraded (sensor fusion + DSP cost)

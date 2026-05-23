@@ -301,17 +301,27 @@ class GovernedMigrationField:
         for i in range(n_drones):
             self.assignment[i] = "END"
 
-    def goal_for_drone(self, drone_id: int, drone_pos: np.ndarray) -> np.ndarray:
-        """Compute the drone's next waypoint:
-          - If assigned to END: route through the lowest-cost corridor first,
-            then on to END once past the pass.
-          - If assigned to START: head back to start.
+    def goal_for_drone(
+        self,
+        drone_id: int,
+        drone_pos: np.ndarray,
+        shield_class: str | None = None,
+    ) -> np.ndarray:
+        """Compute the drone's next waypoint.
+
+        If `shield_class` is hijacked / kill_switched, the drone is barred
+        from entering corridor zones — it gets diverted back to a REST cell
+        and held there until SHIELD restores trust.
         """
+        # SHIELD gating: hijacked drones lose corridor access
+        if shield_class in ("hijacked", "kill_switched"):
+            rest = next((z for z in self.zones if z.kind == "rest"), None)
+            if rest is not None:
+                return np.array(rest.center)
         target_zone_id = self.assignment.get(drone_id, "END")
         target = next((z for z in self.zones if z.id == target_zone_id), None)
         if target is None:
             return drone_pos
-        # If not yet past mid-line, route through a corridor; else head straight.
         y = float(drone_pos[1])
         target_y = target.center[1]
         if target_zone_id == "END" and y < target_y - 4:
