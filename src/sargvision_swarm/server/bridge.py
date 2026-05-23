@@ -72,6 +72,17 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         from sargvision_swarm.server.geo import local_to_geo as _local_to_geo
         for h in session.hostile_fleet.hostiles:
             lon, lat = _local_to_geo(float(h.pos[0]), float(h.pos[1]))
+            posterior = None
+            threat_label = None
+            shield_state_pre = getattr(session, "shield_state", None)
+            if shield_state_pre is not None:
+                post = shield_state_pre.posteriors.get(int(h.id))
+                if post is not None:
+                    posterior = [float(x) for x in post.tolist()]
+                    from sargvision_swarm.orchestrator.shield import (
+                        THREAT_CLASSES as _TC,
+                    )
+                    threat_label = str(_TC[int(post.argmax())])
             hostiles.append(
                 {
                     "id": int(h.id),
@@ -83,8 +94,24 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                     "bearing_deg": float(h.spawn_bearing_deg),
                     "intent": h.intent_label,
                     "assigned_to": h.assigned_to,
+                    "threat_class": threat_label,
+                    "posterior": posterior,
                 }
             )
+
+    # ── SHIELD state surfaced per-drone ──
+    shield_state = getattr(session, "shield_state", None)
+    shield_params = getattr(session, "shield_params", None)
+    spoofed_ids = set(getattr(session, "spoofed_ids", set()) or set())
+    kill_switched_ids = set(getattr(session, "shield_kill_switched", set()) or set())
+    trust_kill_threshold = (
+        float(shield_params.trust_kill_threshold) if shield_params is not None else 0.25
+    )
+    have_shield = (
+        shield_state is not None
+        and getattr(shield_state, "loyalty", None) is not None
+        and shield_state.loyalty.size == session.swarm.n
+    )
 
     drones = []
     intercept = getattr(session, "intercept_assignment", {}) or {}
@@ -92,6 +119,18 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
     for d in session.swarm.drones:
         lon, lat = local_to_geo(float(d.pos[0]), float(d.pos[1]))
         vx, vy = float(d.vel[0]), float(d.vel[1])
+        loyalty = float(shield_state.loyalty[int(d.id)]) if have_shield else 1.0
+        trust = float(shield_state.trust[int(d.id)]) if have_shield else 1.0
+        spoofed = int(d.id) in spoofed_ids
+        kill_switched = int(d.id) in kill_switched_ids
+        if kill_switched:
+            shield_class = "kill_switched"
+        elif spoofed:
+            shield_class = "hijacked"
+        elif trust < 0.55:
+            shield_class = "suspect"
+        else:
+            shield_class = "loyal"
         drones.append(
             {
                 "id": int(d.id),
@@ -108,6 +147,9 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                 "platform": _platform_for_drone(d),
                 "task": task_map.get(int(d.id), "STATION HOLD"),
                 "intercept_target": intercept.get(int(d.id)),
+                "loyalty": loyalty,
+                "trust": trust,
+                "shield_class": shield_class,
             }
         )
 
@@ -185,6 +227,26 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                     "alt_m": float(k["pos"][2]),
                 }
             )
+    # ── SHIELD aggregate summary surfaced to console ──
+    loyal_n = sum(1 for d in drones if d["shield_class"] == "loyal")
+    suspect_n = sum(1 for d in drones if d["shield_class"] == "suspect")
+    hijacked_n = sum(1 for d in drones if d["shield_class"] == "hijacked")
+    kill_switched_n = sum(1 for d in drones if d["shield_class"] == "kill_switched")
+    threat_mix = {"decoy": 0, "kinetic": 0, "nuisance": 0, "unknown": 0}
+    for h in hostiles:
+        cls = h.get("threat_class") or "unknown"
+        threat_mix[cls] = threat_mix.get(cls, 0) + 1
+    shield_summary = {
+        "loyal": loyal_n,
+        "suspect": suspect_n,
+        "hijacked": hijacked_n,
+        "kill_switched": kill_switched_n,
+        "decoys_skipped": int(getattr(session, "shield_decoy_skipped", 0)),
+        "trust_kill_threshold": trust_kill_threshold,
+        "threat_mix": threat_mix,
+        "hijack_active": bool(getattr(session, "hijack_active", False)),
+    }
+
     return {
         "t": float(session.swarm.t),
         "step": int(session.step_i),
@@ -197,10 +259,12 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         "bft_events": bft_events,
         "cbba_events": cbba_events,
         "kill_events": kill_events,
+        "shield": shield_summary,
         "stats": stats,
         "flags": {
             "jamming": bool(getattr(session, "jamming", False)),
             "gnss_denied": bool(getattr(session, "gnss_denied", False)),
+            "hijack_active": bool(getattr(session, "hijack_active", False)),
         },
     }
 
@@ -381,6 +445,17 @@ async def toggle_gnss() -> dict:
         return {"ok": False, "reason": "no active session"}
     sess.gnss_denied = not sess.gnss_denied
     return {"ok": True, "gnss_denied": sess.gnss_denied}
+
+
+@app.post("/hijack/toggle")
+async def toggle_hijack() -> dict:
+    """SHIELD demo: inject sensor-spoofed friendlies. PageRank trust collapses,
+    sheaf loyalty drops, kill-switch fires below threshold."""
+    sess = service.session
+    if sess is None:
+        return {"ok": False, "reason": "no active session"}
+    sess.hijack_active = not sess.hijack_active
+    return {"ok": True, "hijack_active": sess.hijack_active}
 
 
 @app.websocket("/swarm")
