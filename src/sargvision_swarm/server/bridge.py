@@ -258,6 +258,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         occ = migration_field.occupancy()
         from sargvision_swarm.server.geo import local_to_geo as _mig_l2g
         zones_payload = []
+        closed_until = getattr(migration_field, "closed_until", {}) or {}
         for z in migration_field.zones:
             zlon, zlat = _mig_l2g(float(z.center[0]), float(z.center[1]))
             zones_payload.append(
@@ -272,6 +273,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                     "capacity": int(z.capacity),
                     "occupancy": int(occ.get(z.id, 0)),
                     "color": z.color_hex,
+                    "closed": z.id in closed_until,
                 }
             )
         hazards_payload = []
@@ -314,6 +316,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
             "assignments": {
                 str(k): v for k, v in migration_field.assignment.items()
             },
+            "closure_events": list(getattr(migration_field, "closure_events", [])),
         }
 
     # ── SHIELD aggregate summary surfaced to console ──

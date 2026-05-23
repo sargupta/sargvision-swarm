@@ -83,6 +83,12 @@ class GovernedMigrationField:
     entry_events: list[tuple[float, str, int]] = field(default_factory=list)
     # Storm centre velocities (sim m/s) for slow drift.
     storm_vel: dict[str, tuple[float, float]] = field(default_factory=dict)
+    # Pass-closure scheduler — every ~30 s after a 25 s warm-up, randomly close
+    # one corridor for 30 s. Drones reroute live.
+    closed_until: dict[str, float] = field(default_factory=dict)
+    _next_closure_t: float = 25.0
+    _original_capacity: dict[str, int] = field(default_factory=dict)
+    closure_events: list[dict] = field(default_factory=list)
 
     @classmethod
     def build_ladakh(cls) -> GovernedMigrationField:
@@ -161,6 +167,8 @@ class GovernedMigrationField:
         best: Zone | None = None
         best_score = float("inf")
         for z in self.corridor_zones():
+            if z.id in self.closed_until:
+                continue  # Closed pass — drone must route elsewhere
             zpos = np.array(z.center)
             dist = float(np.linalg.norm(drone_pos[:2] - zpos[:2]))
             # Capacity penalty — hard wall as we approach the cap
@@ -183,6 +191,37 @@ class GovernedMigrationField:
         back through the loop (turns around for return leg) — keeps the
         scenario going indefinitely.
         """
+        # ── Pass closure scheduler ──
+        if not self._original_capacity:
+            self._original_capacity = {z.id: z.capacity for z in self.zones}
+        if t >= self._next_closure_t:
+            corridors = [z for z in self.corridor_zones() if z.id not in self.closed_until]
+            if corridors:
+                import random as _r
+                pick = _r.choice(corridors)
+                self.closed_until[pick.id] = t + 30.0
+                pick.capacity = 0
+                self.closure_events.append(
+                    {"t": float(t), "zone": pick.id, "name": pick.name, "kind": "closed"}
+                )
+                self.closure_events = self.closure_events[-12:]
+                self._next_closure_t = t + 30.0
+        # Reopen any expired closures
+        for zid, expire in list(self.closed_until.items()):
+            if t >= expire:
+                z = next((zz for zz in self.zones if zz.id == zid), None)
+                if z is not None:
+                    z.capacity = self._original_capacity.get(zid, z.capacity)
+                self.closed_until.pop(zid, None)
+                self.closure_events.append(
+                    {
+                        "t": float(t),
+                        "zone": zid,
+                        "name": next(zz.name for zz in self.zones if zz.id == zid),
+                        "kind": "reopen",
+                    }
+                )
+
         # Pulse storms (visual breathing) + drift each storm centre slowly.
         if not self.storm_vel:
             # First call — assign each storm a small wander velocity

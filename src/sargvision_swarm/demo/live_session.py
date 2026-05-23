@@ -362,7 +362,24 @@ class LiveSession:
             # Jamming penalty: slow the swarm + reduce pull gain (~half speed)
             jam_factor = 0.45 if self.jamming else 1.0
             slot_pull = (per_goal - positions) * (0.9 * jam_factor) - velocities * 0.4
+
+            # ── Cost-tier weather: drones inside hazard cells run slower
+            #    AND drain battery faster (sensor noise + headwind power cost).
+            in_weather: list[bool] = []
+            for i in range(positions.shape[0]):
+                cost = self.migration_field.hazard_cost(positions[i])
+                if cost > 0.1:
+                    slot_pull[i] *= max(0.45, 1.0 - cost * 0.7)  # slowdown
+                    in_weather.append(True)
+                else:
+                    in_weather.append(False)
+
             v_cmd = bvc_safe_velocity(positions, slot_pull, safety_radius=1.2, dt=0.1)
+
+            # Weather battery hit: drones in weather drain 2× during this tick.
+            for i, d in enumerate(self.swarm.drones):
+                if in_weather[i]:
+                    d.battery = max(0.0, d.battery - 0.0008)
 
             # GNSS-denied: add per-tick position drift (each drone gets a small
             # random walk in xy because nav drifts without GPS lock). Vision-
@@ -379,14 +396,16 @@ class LiveSession:
             for i in range(positions.shape[0]):
                 zid = self.migration_field.assignment.get(i, "?")
                 base = f"MIGRATE → {zid}"
+                prefix = ""
+                if in_weather[i]:
+                    prefix = "STORM · "
                 if self.gnss_denied and self.jamming:
-                    self.current_task[i] = f"DEGRADED · {base}"
+                    prefix = "DEGRADED · " + prefix
                 elif self.gnss_denied:
-                    self.current_task[i] = f"BLIND · {base}"
+                    prefix = "BLIND · " + prefix
                 elif self.jamming:
-                    self.current_task[i] = f"JAMMED · {base}"
-                else:
-                    self.current_task[i] = base
+                    prefix = "JAMMED · " + prefix
+                self.current_task[i] = prefix + base
 
             # Battery drain accelerated when degraded (sensor fusion + DSP cost)
             extra = 0.0003 * (int(self.jamming) + int(self.gnss_denied))
