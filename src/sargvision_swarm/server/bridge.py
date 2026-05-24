@@ -691,12 +691,16 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(lifespan=lifespan, title="SARGVISION Swarm Bridge")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origin_regex=(
+        r"https?://(localhost|127\.0\.0\.1)(:\d+)?$|"
+        r"https://([a-z0-9-]+\.)*sargvision-swarm\.pages\.dev$|"
+        r"https://([a-z0-9-]+\.)*pages\.dev$|"
+        r"https://([a-z0-9-]+\.)*trycloudflare\.com$|"
+        r"https://([a-z0-9-]+\.)*sargvision\.com$"
+    ),
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=False,
 )
 
 
