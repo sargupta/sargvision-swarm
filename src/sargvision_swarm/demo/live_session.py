@@ -10,7 +10,6 @@ import math
 import random
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Literal
 
 import numpy as np
 
@@ -18,7 +17,6 @@ from sargvision_swarm.agents.backends import MockBackend
 from sargvision_swarm.agents.peer_dialogue import PeerDialogue
 from sargvision_swarm.comms import (
     BandwidthTracker,
-    Channels,
     CommModel,
     InMemoryBus,
     MessageLog,
@@ -26,21 +24,18 @@ from sargvision_swarm.comms import (
     WireMessage,
 )
 from sargvision_swarm.comms.protocols import IntentPayload
-from sargvision_swarm.core import ReflexParams, SwarmState, compose_reflex
+from sargvision_swarm.core import SwarmState, compose_reflex
 from sargvision_swarm.core.bvc import bvc_safe_velocity
 from sargvision_swarm.orchestrator import EDCBBA, MissionGoal, MissionPlanner, SwarmRaft, Task
-from sargvision_swarm.orchestrator.shield import (
-    ShieldParams,
-    ShieldState,
-    expected_damage,
-    shield_priorities,
-    threat_class,
-)
 from sargvision_swarm.orchestrator.chanakya import (
     ChanakyaParams,
     ChanakyaState,
     chanakya_plan_swarm,
+)
+from sargvision_swarm.orchestrator.chanakya import (
     desired_velocity as chanakya_desired_velocity,
+)
+from sargvision_swarm.orchestrator.chanakya import (
     plan_summary as chanakya_summary,
 )
 from sargvision_swarm.orchestrator.maya import (
@@ -54,12 +49,24 @@ from sargvision_swarm.orchestrator.sheshnag import (
     SheshnagState,
     sheshnag_tick,
 )
+from sargvision_swarm.orchestrator.shield import (
+    ShieldParams,
+    ShieldState,
+    expected_damage,
+    shield_priorities,
+    threat_class,
+)
 from sargvision_swarm.orchestrator.vajra import (
     VajraParams,
     VajraState,
     vajra_assign,
 )
 from sargvision_swarm.sim import SimConfig, SimpleSim
+from sargvision_swarm.sim.border_strike import (
+    BorderStrikeField,
+    spawn_border_strike_hostiles,
+    vector_hostiles_at_hvts,
+)
 from sargvision_swarm.sim.defense_field import DefenseField
 from sargvision_swarm.sim.hostiles import HostileFleet
 
@@ -103,6 +110,8 @@ def _role_orbit_offset(t: float, drone_idx: int, role) -> np.ndarray:
     r, w = 1.2, 2 * math.pi / 18.0
     ang = w * t + phase
     return np.array([r * math.cos(ang), r * math.sin(ang), 0.0])
+
+
 from sargvision_swarm.viz.live_frame import FloatingEvent, RecentMessage, TrailHistory
 
 
@@ -135,7 +144,9 @@ class LiveSession:
         self._rng = random.Random(seed)
 
         planner = MissionPlanner()
-        self.plan = planner.plan(MissionGoal(goal_text="live", n_drones=n_drones, scenario=scenario))
+        self.plan = planner.plan(
+            MissionGoal(goal_text="live", n_drones=n_drones, scenario=scenario)
+        )
         self.swarm = SwarmState.random_init(n_drones, seed=seed)
         self.sim = SimpleSim(SimConfig(dt=0.05), seed=seed)
         self.bus = InMemoryBus()
@@ -146,7 +157,7 @@ class LiveSession:
         self.intents: dict[int, str] = {d.id: "hold_formation" for d in self.swarm.drones}
 
         self.cbba_tasks: list[Task] = []
-        if scenario == "coverage":
+        if scenario in ("coverage", "border_strike"):
             for i, b in enumerate(self.plan.bundles):
                 if b.goal_pos:
                     self.cbba_tasks.append(Task(id=f"cell-{i:02d}", pos=b.goal_pos))
@@ -170,23 +181,92 @@ class LiveSession:
         self.step_i = 0
         self.goal_pos = np.array(self.plan.goal_pos)
 
-        # Hostile stream only active in counter-swarm scenario.
+        # Hostile stream active in counter-swarm + border-strike scenarios.
         self.hostile_fleet: HostileFleet | None = None
+        self.border_strike: BorderStrikeField | None = None
         if scenario == "coverage":
             self.hostile_fleet = HostileFleet(
                 spawn_count=12,
                 spawn_radius_m=40.0,
-                cruise_speed_ms=1.0,
-                engagement_radius_m=2.8,
+                cruise_speed_ms=0.9,  # ↓ from 1.0 so defenders can close
+                engagement_radius_m=3.6,  # ↑ from 2.8 so kills register on close-pass
                 seed=(seed or 0) + 1,
             )
             self.hostile_fleet.spawn_initial(center=self.swarm.positions.mean(axis=0))
             self._hostile_first_contact_fired = False
 
+            # ── Coverage VYUHA strategy (4 variants — see 42_COVERAGE_STRATEGIES.md)
+            from sargvision_swarm.orchestrator.vyuha import (
+                COVERAGE_ZONE_ID,
+                VyuhaPlan,
+                plan_for_strategy,
+            )
+
+            self.vyuha_strategy = "ring_uniform"
+            centre_pos = np.array([0.0, 0.0, 5.5])
+            self.vyuha_plan = plan_for_strategy(
+                self.vyuha_strategy,
+                n_drones,
+                {COVERAGE_ZONE_ID: centre_pos},
+            )
+            for i, d in enumerate(self.swarm.drones):
+                if i < len(self.vyuha_plan.spawns):
+                    spec = self.vyuha_plan.spawns[i]
+                    d.pos = spec.pos.astype(float).copy()
+                    d.vel = np.zeros(3)
+            self.drone_sector = {}
+            for i, d in enumerate(self.swarm.drones):
+                spec = self.vyuha_plan.spawns[i] if i < len(self.vyuha_plan.spawns) else None
+                self.drone_sector[int(d.id)] = spec.sector_hvt if spec else None
+        elif scenario == "border_strike":
+            # Operation Trishul — multi-axis attack on Leh AB + Karu power + DBO.
+            # Friendly cruise must outpace hostile cruise so interceptors can
+            # close the gap before the hostile reaches its HVT — otherwise the
+            # demo is mathematically unwinnable regardless of strategy.
+            self.border_strike = BorderStrikeField.build_default()
+            self.hostile_fleet = HostileFleet(
+                spawn_count=12,
+                spawn_radius_m=22.0,
+                cruise_speed_ms=0.9,  # ↓ from 1.1: hostiles slower
+                engagement_radius_m=3.6,  # ↑ from 2.6: larger lethal radius
+                seed=(seed or 0) + 1,
+            )
+            spawn_border_strike_hostiles(
+                self.hostile_fleet, self.border_strike, seed=(seed or 0) + 1
+            )
+            self._hostile_first_contact_fired = False
+
+            # ── VYUHA defence strategy ──────────────────────────────
+            # `vyuha_strategy` is mutable from the bridge (POST /vyuha/{name})
+            # so the operator can toggle CENTRAL / DISTRIBUTED / LAYERED / CAP
+            # and see different per-HVT outcomes side-by-side.
+            from sargvision_swarm.orchestrator.vyuha import (
+                VyuhaPlan,
+                plan_for_strategy,
+            )
+
+            self.vyuha_strategy: str = "distributed"
+            hvt_positions = {h.id: h.pos for h in self.border_strike.hvts}
+            self.vyuha_plan: VyuhaPlan = plan_for_strategy(
+                self.vyuha_strategy, n_drones, hvt_positions
+            )
+            # Materialise spawn placements onto the actual swarm drones.
+            for i, d in enumerate(self.swarm.drones):
+                if i < len(self.vyuha_plan.spawns):
+                    spec = self.vyuha_plan.spawns[i]
+                    d.pos = spec.pos.astype(float).copy()
+                    d.vel = np.zeros(3)
+            # Per-drone sector membership lookup (drone_id → hvt_id | None)
+            self.drone_sector: dict[int, str | None] = {}
+            for i, d in enumerate(self.swarm.drones):
+                spec = self.vyuha_plan.spawns[i] if i < len(self.vyuha_plan.spawns) else None
+                self.drone_sector[int(d.id)] = spec.sector_hvt if spec else None
+
         # ── GOVERNED MIGRATION scenario — multi-corridor traversal ──
         self.migration_field = None
         if scenario == "migration":
             from sargvision_swarm.sim.migration_zones import GovernedMigrationField
+
             self.migration_field = GovernedMigrationField.build_ladakh()
             n = n_drones
             # Spawn drones in a tight band at START (south edge of map)
@@ -197,6 +277,16 @@ class LiveSession:
                 d.pos = np.array([xs[i], ys[i], zs[i]], dtype=float)
                 d.vel = np.zeros(3)
             self.migration_field.initial_assignments(n)
+            # ── Migration VYUHA strategy (4 variants — see 44_MIGRATION_STRATEGIES.md)
+            from sargvision_swarm.orchestrator.vyuha import (
+                VyuhaPlan,
+                plan_for_strategy,
+            )
+
+            self.vyuha_strategy = "load_balanced"
+            self.vyuha_plan = plan_for_strategy(self.vyuha_strategy, n, {})
+            self.migration_field.strategy = self.vyuha_strategy
+            self.drone_sector = {int(d.id): None for d in self.swarm.drones}
 
         # CHANAKYA SEAD-ingress scenario — friendlies cross a hostile IADS.
         self.defense_field: DefenseField | None = None
@@ -224,15 +314,32 @@ class LiveSession:
             )
             self.chanakya_state = ChanakyaState()
             # Strong β, γ so the geodesic actually swerves around the IADS ring.
-            # Default (β=1.5, γ=2.0) is a research-grade prior; for the demo we
-            # want the curving to be visible at scenario scale.
             from sargvision_swarm.core.riemannian import MetricParams
+
             self.chanakya_params = ChanakyaParams(
                 metric=MetricParams(beta=12.0, gamma=3.0),
             )
-            self.chanakya_targets = np.stack([
-                np.array([xs[i], 32.0, 6.0], dtype=float) for i in range(n)
-            ])
+            self.chanakya_targets = np.stack(
+                [np.array([xs[i], 32.0, 6.0], dtype=float) for i in range(n)]
+            )
+
+            # ── SEAD VYUHA strategy (4 variants — see 43_SEAD_STRATEGIES.md)
+            from sargvision_swarm.orchestrator.vyuha import (
+                VyuhaPlan,
+                plan_for_strategy,
+            )
+
+            self.vyuha_strategy = "geodesic_direct"
+            sam_positions = {a.name: a.pos for a in self.defense_field.assets}
+            self.vyuha_plan = plan_for_strategy(
+                self.vyuha_strategy,
+                n,
+                sam_positions,
+            )
+            # Apply per-strategy metric override
+            self._apply_sead_strategy_overrides()
+            # Per-drone SEAD role lookup (drone_id → "strike"|"decoy"|"weasel")
+            self.drone_sector = {int(d.id): None for d in self.swarm.drones}
 
         # Role distribution — make this look like a real ORBAT.
         # 1 LEADER + 4 SCOUTS + 4 RELAYS + rest STRIKERS (WORKER).
@@ -308,10 +415,23 @@ class LiveSession:
             )
             slot_pull = (per_goal - positions) * 1.4 - velocities * 0.6
             v_cmd = bvc_safe_velocity(positions, slot_pull, safety_radius=0.9, dt=0.1)
-        elif self.plan.scenario == "coverage":
+        elif self.plan.scenario in ("coverage", "border_strike"):
             per_goal = np.array(
                 [b.goal_pos if b.goal_pos else self.goal_pos.tolist() for b in self.plan.bundles]
             )
+            # ── VYUHA — override per_goal so each drone HOLDS its sector
+            # position instead of being pulled back to the central rally point.
+            # Applies in BOTH border_strike (multi-HVT) and coverage (single zone).
+            if getattr(self, "vyuha_plan", None) is not None:
+                for i, d in enumerate(self.swarm.drones):
+                    if i >= len(self.vyuha_plan.spawns):
+                        continue
+                    spec = self.vyuha_plan.spawns[i]
+                    # Any spec with a defined spawn position holds it — regardless
+                    # of ring / sector — unless central ring (which keeps the
+                    # bundles-based goal).
+                    if spec.ring != "central":
+                        per_goal[i] = spec.pos.copy()
             # ── Per-role ORBIT offset so drones VISIBLY fly patrol patterns ──
             sim_t = float(self.swarm.t)
             assigned = set(self.intercept_assignment.keys())
@@ -322,7 +442,21 @@ class LiveSession:
                     # RTB: pull toward base origin instead of orbiting
                     per_goal[i] = np.array([0.0, 0.0, 5.5])
                     continue
-                per_goal[i] = per_goal[i] + _role_orbit_offset(sim_t, i, d.role)
+                # Smaller orbit radius for sector-bound drones so they stay
+                # within their HVT's local airspace; larger for CENTRAL ring
+                # drones that retain their patrol pattern.
+                sector_bound = (
+                    self.plan.scenario == "border_strike"
+                    and getattr(self, "vyuha_plan", None) is not None
+                    and i < len(self.vyuha_plan.spawns)
+                    and self.vyuha_plan.spawns[i].sector_hvt is not None
+                )
+                if sector_bound:
+                    # Tight 1m orbit around assigned position — drone stays put.
+                    orbit = _role_orbit_offset(sim_t, i, d.role) * 0.25
+                else:
+                    orbit = _role_orbit_offset(sim_t, i, d.role)
+                per_goal[i] = per_goal[i] + orbit
             # If a drone is assigned to intercept a hostile, override its slot.
             if self.hostile_fleet is not None:
                 hostile_by_id = {h.id: h for h in self.hostile_fleet.hostiles}
@@ -471,7 +605,9 @@ class LiveSession:
         elif self.plan.scenario == "hover":
             v_cmd = (self.goal_pos - positions) * 1.0 - velocities * 0.8
         else:
-            v_cmd = compose_reflex(positions, velocities, algorithm=self.plan.algorithm, goal_pos=self.goal_pos)
+            v_cmd = compose_reflex(
+                positions, velocities, algorithm=self.plan.algorithm, goal_pos=self.goal_pos
+            )
 
         self.sim.step(self.swarm, v_cmd)
         t = self.swarm.t
@@ -508,6 +644,38 @@ class LiveSession:
                             f"t={t:.2f}s  ✅ CHANAKYA DRN-{self.swarm.drones[i].id:03d} reached target"
                         )
 
+        # ── Border-strike: continuously re-aim hostiles at their HVT and
+        #    advance the scripted phase machine. Damage eval happens AFTER the
+        #    fleet.step() integration so positions are up to date.
+        if self.border_strike is not None and self.hostile_fleet is not None:
+            vector_hostiles_at_hvts(
+                self.hostile_fleet.hostiles, self.border_strike, dt=self.sim.cfg.dt
+            )
+            # ── Event-coupled phase events — narrative tracks actual kill chain
+            #    instead of a wall-clock script that drifts out of sync.
+            alive_h = [h for h in self.hostile_fleet.hostiles if h.alive]
+            alive_kinetics = [h for h in alive_h if getattr(h, "threat_class", "") == "kinetic"]
+            posteriors = getattr(self.shield_state, "threat_posterior", {}) or {}
+            posterior_settled = len(self.hostile_fleet.hostiles) > 0 and all(
+                h.id in posteriors and max(posteriors[h.id].values()) > 0.55
+                for h in self.hostile_fleet.hostiles[:6]  # sample first 6 to avoid scan cost
+            )
+            phase_events = {
+                "first_detection": len(self.hostile_fleet.hostiles) > 0,
+                "posterior_settled": posterior_settled,
+                "first_assignment": len(self.intercept_assignment) > 0,
+                "bft_authorized": self.bft_count > 0,
+                "first_kill": self.hostile_fleet.neutralized > 0,
+                "all_kinetics_dead": len(alive_kinetics) == 0 and self.hostile_fleet.spawned > 0,
+                "hvt_all_struck": self.border_strike.all_hvts_struck(),
+            }
+            advanced = self.border_strike.step_phase(t, events=phase_events)
+            if advanced:
+                ph = self.border_strike.current_phase()
+                result.event_log_lines.append(
+                    f"t={t:.2f}s  ▶ TRISHUL PHASE → {ph.name} · {ph.caption}"
+                )
+
         # ── Hostile fleet ───────────────────────────────────────────
         if self.hostile_fleet is not None:
             tick = self.hostile_fleet.step(
@@ -515,6 +683,35 @@ class LiveSession:
                 friendly_positions=self.swarm.positions,
                 center=self.swarm.positions.mean(axis=0),
             )
+
+            # Border-strike: register HVT impacts + update per-HVT metrics.
+            if self.border_strike is not None:
+                impacts = self.border_strike.evaluate_hvt_damage(self.hostile_fleet.hostiles, t)
+                # Detection tracking — flip first_detect_t the moment an HVT goes
+                # UNDER_ATTACK
+                if getattr(self, "vyuha_plan", None) is not None:
+                    for hvt in self.border_strike.hvts:
+                        m = self.vyuha_plan.metrics.get(hvt.id)
+                        if m is None:
+                            continue
+                        if m.first_detect_t is None and hvt.status == "UNDER_ATTACK":
+                            m.first_detect_t = float(t)
+                for imp in impacts:
+                    hvt = self.border_strike.hvt_by_id(imp["hvt_id"])
+                    if hvt is None:
+                        continue
+                    if getattr(self, "vyuha_plan", None) is not None:
+                        m = self.vyuha_plan.metrics.get(hvt.id)
+                        if m is not None and m.first_hit_t is None:
+                            m.first_hit_t = float(t)
+                    if hvt.status == "STRUCK":
+                        result.event_log_lines.append(
+                            f"t={t:.2f}s  💥 HVT STRUCK — {hvt.name} hit by {imp['callsign']}"
+                        )
+                    else:
+                        result.event_log_lines.append(
+                            f"t={t:.2f}s  ⚠ HVT IMPACT — {hvt.name} damage→{int((1 - hvt.health) * 100)}% by {imp['callsign']}"
+                        )
 
             # ── SHIELD trust-weighted Bayesian engagement assignment ──
             # Hijack injection (demo toggle): corrupt 1-2 friendly sensor streams
@@ -541,13 +738,38 @@ class LiveSession:
                 params=self.shield_params,
                 spoofed_ids=self.spoofed_ids if self.spoofed_ids else None,
             )
-            # ── VAJRA resolves with Voronoi hysteresis + tropical attention ──
-            hostile_pos_active = np.array(
-                [
-                    next(h.pos for h in self.hostile_fleet.hostiles if h.id == hid)
+            # ── VYUHA sector filter — drone-bound-to-HVT cannot bid on hostile-bound-elsewhere
+            # Applies in both border_strike + coverage. In coverage, the only
+            # sector is the protected ZONE and hostiles target the centroid →
+            # filter is a no-op there but the call is kept for uniformity.
+            if getattr(self, "vyuha_plan", None) is not None and getattr(
+                self, "drone_sector", None
+            ):
+                from sargvision_swarm.orchestrator.vyuha import filter_priorities_by_sector
+
+                friendly_sector_list = [self.drone_sector.get(int(d.id)) for d in self.swarm.drones]
+                hostile_by_id = {h.id: h for h in self.hostile_fleet.hostiles}
+                hostile_sector_list = [
+                    getattr(hostile_by_id.get(hid), "target_hvt", None)
                     for hid in hostile_ids_active
                 ]
-            ) if hostile_ids_active else np.zeros((0, 3))
+                priority_E = filter_priorities_by_sector(
+                    priority_E,
+                    friendly_sector_list,
+                    hostile_sector_list,
+                )
+
+            # ── VAJRA resolves with Voronoi hysteresis + tropical attention ──
+            hostile_pos_active = (
+                np.array(
+                    [
+                        next(h.pos for h in self.hostile_fleet.hostiles if h.id == hid)
+                        for hid in hostile_ids_active
+                    ]
+                )
+                if hostile_ids_active
+                else np.zeros((0, 3))
+            )
             # Jamming flag in the console flows directly into HSL-CC concurrency cap.
             self.vajra_params.jamming_factor = 0.5 if self.jamming else 0.0
             shield_new = vajra_assign(
@@ -563,19 +785,13 @@ class LiveSession:
             )
 
             # Fragmentation alarm — only emit on edge.
-            if (
-                self.vajra_state.n_components > 1
-                and not self.fragmentation_alarmed
-            ):
+            if self.vajra_state.n_components > 1 and not self.fragmentation_alarmed:
                 self.fragmentation_alarmed = True
                 result.event_log_lines.append(
                     f"t={t:.2f}s  ⚠  VAJRA FRAGMENTATION — comm graph split into "
                     f"{self.vajra_state.n_components} components (λ₂={self.vajra_state.lambda2:.3f})"
                 )
-            elif (
-                self.vajra_state.n_components == 1
-                and self.fragmentation_alarmed
-            ):
+            elif self.vajra_state.n_components == 1 and self.fragmentation_alarmed:
                 self.fragmentation_alarmed = False
                 result.event_log_lines.append(
                     f"t={t:.2f}s  ✓  VAJRA comm graph reconnected (λ₂={self.vajra_state.lambda2:.3f})"
@@ -583,7 +799,8 @@ class LiveSession:
 
             # Surface newly kill-switched drones (trust < threshold).
             killed_now = {
-                i for i, T in enumerate(self.shield_state.trust)
+                i
+                for i, T in enumerate(self.shield_state.trust)
                 if T < self.shield_params.trust_kill_threshold
             }
             newly_killed = killed_now - self.shield_kill_switched
@@ -637,8 +854,8 @@ class LiveSession:
                 top = max(pd, key=pd.get)
                 result.event_log_lines.append(
                     f"t={t:.2f}s  🧠 MAYA posture: {top.upper()} "
-                    f"({pd[top]*100:.0f}%) — value={sol.value:.2f} "
-                    f"μ̂_H={dict(zip(['dec','kin','nui'], np.round(self.maya_state.hostile_posterior, 2)))}"
+                    f"({pd[top] * 100:.0f}%) — value={sol.value:.2f} "
+                    f"μ̂_H={dict(zip(['dec', 'kin', 'nui'], np.round(self.maya_state.hostile_posterior, 2)))}"
                 )
                 # Modulate downstream SHIELD/VAJRA params per posture.
                 # INTERCEPT-heavy → sharper tropical attention + lower kill-switch
@@ -646,17 +863,13 @@ class LiveSession:
                 # RETREAT-heavy  → looser tropical to spread thin
                 self.vajra_params.tropical_beta = 4.0 + 12.0 * pd["intercept"]
                 self.vajra_params.voronoi_margin = 1.0 + 2.0 * pd["defend"]
-                self.shield_params.trust_kill_threshold = max(
-                    0.15, 0.25 - 0.10 * pd["intercept"]
-                )
+                self.shield_params.trust_kill_threshold = max(0.15, 0.25 - 0.10 * pd["intercept"])
 
             # ── SHESHNAG offensive psyops tick ──
             # Init panic vector when fleet first becomes non-empty.
             n_h = len(self.hostile_fleet.hostiles)
             if self.panic_vector.shape[0] != n_h:
-                self.panic_vector = np.array(
-                    [h.panic_level for h in self.hostile_fleet.hostiles]
-                )
+                self.panic_vector = np.array([h.panic_level for h in self.hostile_fleet.hostiles])
             # If user armed SHESHNAG and we haven't taken the BFT vote yet, do it.
             if self.sheshnag_armed and not self.sheshnag_bft_voted:
                 self.sheshnag_bft_voted = True
@@ -673,15 +886,17 @@ class LiveSession:
                 self.bft_flash = {v.voter_id for v in votes}
                 self.bft_flash_ttl = 14
                 self.bft_count += 1
-                self.bft_history.append({
-                    "t": float(t),
-                    "proposal": "authorize_psyops:sheshnag_broadcast",
-                    "passed": bool(passed),
-                    "yes": sum(1 for v in votes if v.decision == "yes"),
-                    "no": sum(1 for v in votes if v.decision == "no"),
-                    "voters": [int(v.voter_id) for v in votes],
-                    "byzantine": [],
-                })
+                self.bft_history.append(
+                    {
+                        "t": float(t),
+                        "proposal": "authorize_psyops:sheshnag_broadcast",
+                        "passed": bool(passed),
+                        "yes": sum(1 for v in votes if v.decision == "yes"),
+                        "no": sum(1 for v in votes if v.decision == "no"),
+                        "voters": [int(v.voter_id) for v in votes],
+                        "byzantine": [],
+                    }
+                )
                 if passed:
                     self.sheshnag_state.authorized = True
                     result.event_log_lines.append(
@@ -782,6 +997,7 @@ class LiveSession:
                 raw = self.backend.complete("terse", user, max_tokens=64)
                 try:
                     import json
+
                     self.intents[d.id] = json.loads(raw).get("intent", "hold_formation")
                 except Exception:
                     self.intents[d.id] = "hold_formation"
@@ -814,8 +1030,10 @@ class LiveSession:
             self.bft_flash = {v.voter_id for v in votes}
             self.bft_flash_ttl = 12
             self.bft_count += 1
-            tag = f"BFT PASSED · advance_phase:engage  ({sum(1 for v in votes if v.decision=='yes')}/7)"
-            result.floating_events.append(FloatingEvent(text=tag, x=0.0, y=24.0, color=(252, 211, 77)))
+            tag = f"BFT PASSED · advance_phase:engage  ({sum(1 for v in votes if v.decision == 'yes')}/7)"
+            result.floating_events.append(
+                FloatingEvent(text=tag, x=0.0, y=24.0, color=(252, 211, 77))
+            )
             result.event_log_lines.append(f"t={t:.2f}s  ⚖  BFT vote PASSED — advance_phase:engage")
             self.bft_history.append(
                 {
@@ -920,9 +1138,15 @@ class LiveSession:
             # skip those for renderer overlay.
             if not (0 <= m.src < self.n_drones):
                 continue
-            src_xy = (float(self.swarm.drones[m.src].pos[0]), float(self.swarm.drones[m.src].pos[1]))
+            src_xy = (
+                float(self.swarm.drones[m.src].pos[0]),
+                float(self.swarm.drones[m.src].pos[1]),
+            )
             if m.dst is not None and 0 <= m.dst < self.n_drones:
-                dst_xy = (float(self.swarm.drones[m.dst].pos[0]), float(self.swarm.drones[m.dst].pos[1]))
+                dst_xy = (
+                    float(self.swarm.drones[m.dst].pos[0]),
+                    float(self.swarm.drones[m.dst].pos[1]),
+                )
             else:
                 dst_xy = None
             self.recent_msgs.append(
@@ -962,6 +1186,82 @@ class LiveSession:
 
         self.step_i += 1
         return result
+
+    # ── Strategy hot-swap (border_strike only) ────────────────────────
+
+    def _apply_sead_strategy_overrides(self) -> None:
+        """SEAD-specific: rewire chanakya_targets + metric override per strategy."""
+        from sargvision_swarm.core.riemannian import MetricParams
+
+        if self.vyuha_plan is None or self.chanakya_targets is None:
+            return
+        # Metric override
+        if self.vyuha_plan.metric_override is not None and self.chanakya_params is not None:
+            beta, gamma = self.vyuha_plan.metric_override
+            self.chanakya_params.metric = MetricParams(beta=float(beta), gamma=float(gamma))
+        # Per-drone target overrides (WILD-WEASEL points drones at SAMs)
+        for drone_idx, role_spec in self.vyuha_plan.sead_roles.items():
+            if role_spec.override_target is not None and drone_idx < len(self.chanakya_targets):
+                self.chanakya_targets[drone_idx] = role_spec.override_target.astype(float).copy()
+        # Force chanakya to replan with the new targets + metric
+        if self.chanakya_state is not None:
+            self.chanakya_state.plans = {}
+            self.chanakya_state.next_waypoint_idx = {}
+
+    def set_vyuha_strategy(self, strategy: str) -> bool:
+        """Switch the VYUHA defence strategy on-the-fly + reseat drones.
+
+        Supported scenarios:
+          border_strike → central / distributed / layered / cap (multi-HVT)
+          coverage      → ring_uniform / azimuth_weighted / layered_intercept / flying_cap (single zone)
+          sead_ingress  → geodesic_direct / decoy_mass / wild_weasel / low_observable
+          migration     → load_balanced / fastest_corridor / safest_corridor / adaptive_reroute
+
+        Returns True if the strategy switched; False if the scenario doesn't
+        support it or the strategy name is unrecognised.
+        """
+        from sargvision_swarm.orchestrator.vyuha import (
+            COVERAGE_ZONE_ID,
+            SCENARIO_STRATEGIES,
+            plan_for_strategy,
+        )
+
+        valid = SCENARIO_STRATEGIES.get(self.scenario, [])
+        if strategy not in valid:
+            return False
+        # Pick the right HVT/SAM dict per scenario
+        if self.scenario == "border_strike" and self.border_strike is not None:
+            hvt_positions = {h.id: h.pos for h in self.border_strike.hvts}
+        elif self.scenario == "coverage":
+            hvt_positions = {COVERAGE_ZONE_ID: np.array([0.0, 0.0, 5.5])}
+        elif self.scenario == "sead_ingress" and self.defense_field is not None:
+            hvt_positions = {a.name: a.pos for a in self.defense_field.assets}
+        elif self.scenario == "migration":
+            hvt_positions = {}  # migration strategies don't use spawns
+        else:
+            return False
+        self.vyuha_plan = plan_for_strategy(strategy, self.n_drones, hvt_positions)
+        self.vyuha_strategy = strategy
+        # SEAD: also rewire chanakya targets + metric
+        if self.scenario == "sead_ingress":
+            self._apply_sead_strategy_overrides()
+        # Migration: hot-swap the corridor-pick policy
+        if self.scenario == "migration" and self.migration_field is not None:
+            self.migration_field.strategy = strategy
+        # Reseat the drones at the new spawn positions; clear velocities;
+        # refresh batteries so a strategy comparison starts from a clean state
+        # (otherwise the RTB-on-low-battery override would pull drones to the
+        # central origin and mask the strategy's actual placement).
+        for i, d in enumerate(self.swarm.drones):
+            if i < len(self.vyuha_plan.spawns):
+                spec = self.vyuha_plan.spawns[i]
+                d.pos = spec.pos.astype(float).copy()
+                d.vel = np.zeros(3)
+                d.battery = 1.0
+                self.drone_sector[int(d.id)] = spec.sector_hvt
+        # Clear in-flight intercepts so the new layout starts fresh
+        self.intercept_assignment = {}
+        return True
 
     # ── Snapshot accessors for renderer ────────────────────────────────
 
@@ -1012,7 +1312,9 @@ class LiveSession:
         }
         if self.chanakya_state is not None:
             chanakya.update(chanakya_summary(self.chanakya_state))
-            chanakya["n_active_assets"] = len(self.defense_field.active) if self.defense_field else 0
+            chanakya["n_active_assets"] = (
+                len(self.defense_field.active) if self.defense_field else 0
+            )
         # SHESHNAG psyops telemetry
         sheshnag = {
             "authorized": bool(self.sheshnag_state.authorized),

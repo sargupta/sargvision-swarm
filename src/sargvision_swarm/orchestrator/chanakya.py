@@ -21,6 +21,7 @@ For the live console we run the planner once on scenario start and replan
 incrementally only when `defense_field_dirty` is set (asset added /
 removed / toggled). This keeps the per-tick cost near zero.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -38,21 +39,29 @@ from sargvision_swarm.core.threat_field import DefenseAsset
 
 @dataclass
 class ChanakyaParams:
-    grid: Grid2D = field(default_factory=lambda: Grid2D(
-        x_min=-40.0, x_max=40.0, y_min=-40.0, y_max=40.0,
-        nx=41, ny=41, z_fixed=6.0,
-    ))
+    grid: Grid2D = field(
+        default_factory=lambda: Grid2D(
+            x_min=-40.0,
+            x_max=40.0,
+            y_min=-40.0,
+            y_max=40.0,
+            nx=41,
+            ny=41,
+            z_fixed=6.0,
+        )
+    )
     metric: MetricParams = field(default_factory=MetricParams)
-    waypoint_reach_radius: float = 1.8   # drone "reaches" a waypoint within this
+    waypoint_reach_radius: float = 1.8  # drone "reaches" a waypoint within this
     replan_on_field_change: bool = True
 
 
 @dataclass
 class ChanakyaPlan:
     """A planned geodesic for one drone."""
-    waypoints: np.ndarray            # (K, 3)
+
+    waypoints: np.ndarray  # (K, 3)
     action_cost: float
-    straight_cost: float             # baseline for cost-saving telemetry
+    straight_cost: float  # baseline for cost-saving telemetry
 
     @property
     def savings_ratio(self) -> float:
@@ -64,7 +73,7 @@ class ChanakyaPlan:
 
 @dataclass
 class ChanakyaState:
-    plans: dict[int, ChanakyaPlan] = field(default_factory=dict)   # drone_idx → plan
+    plans: dict[int, ChanakyaPlan] = field(default_factory=dict)  # drone_idx → plan
     next_waypoint_idx: dict[int, int] = field(default_factory=dict)
     last_field_hash: int = 0
     n_plans_total: int = 0
@@ -72,11 +81,17 @@ class ChanakyaState:
 
 def _hash_defense_field(assets: list[DefenseAsset]) -> int:
     """Cheap hash so we replan only when the threat picture actually changes."""
-    return hash(tuple(
-        (round(float(a.pos[0]), 1), round(float(a.pos[1]), 1),
-         round(float(a.engagement_radius), 1), bool(a.active))
-        for a in assets
-    ))
+    return hash(
+        tuple(
+            (
+                round(float(a.pos[0]), 1),
+                round(float(a.pos[1]), 1),
+                round(float(a.engagement_radius), 1),
+                bool(a.active),
+            )
+            for a in assets
+        )
+    )
 
 
 def chanakya_plan_swarm(
@@ -95,11 +110,7 @@ def chanakya_plan_swarm(
     """
     p = params or ChanakyaParams()
     field_hash = _hash_defense_field(defense_field)
-    if (
-        not force
-        and field_hash == state.last_field_hash
-        and state.plans
-    ):
+    if not force and field_hash == state.last_field_hash and state.plans:
         return state.plans
     state.last_field_hash = field_hash
     new_plans: dict[int, ChanakyaPlan] = {}

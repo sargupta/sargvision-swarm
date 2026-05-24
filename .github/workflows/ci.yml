@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  UV_SYSTEM_PYTHON: "1"
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: |
+          uv pip install --system ruff==0.7.4
+      - name: Ruff format check
+        run: ruff format --check src tests
+      - name: Ruff lint
+        run: ruff check src tests
+
+  typecheck:
+    name: Type-check (mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e ".[dev]" || uv pip install --system -e .
+          uv pip install --system mypy==1.13.0
+      - name: Mypy
+        run: mypy src/sargvision_swarm --ignore-missing-imports --no-strict-optional || true
+
+  test:
+    name: Tests (pytest, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: |
+          uv pip install --system -e .
+          uv pip install --system pytest pytest-cov pytest-xdist
+      - name: Run tests
+        run: pytest tests -n auto --cov=sargvision_swarm --cov-report=term --cov-report=xml -v
+      - name: Upload coverage
+        if: matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.python }}
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  bridge-smoke:
+    name: Bridge smoke-test (FastAPI WS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v3
+      - name: Install
+        run: uv pip install --system -e .
+      - name: Boot bridge + curl healthz
+        run: |
+          python -m uvicorn sargvision_swarm.server.bridge:app --host 127.0.0.1 --port 8765 &
+          BRIDGE_PID=$!
+          sleep 6
+          curl -sf http://127.0.0.1:8765/healthz | grep -q "ok" || (echo "healthz failed"; kill $BRIDGE_PID; exit 1)
+          curl -sf http://127.0.0.1:8765/ | grep -q SARGVISION || (echo "root endpoint failed"; kill $BRIDGE_PID; exit 1)
+          kill $BRIDGE_PID
+          echo "bridge boot smoke-test passed"

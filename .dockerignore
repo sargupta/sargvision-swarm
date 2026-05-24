@@ -1,0 +1,48 @@
+# VCS
+.git
+.gitignore
+.github
+
+# Python build
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache
+.mypy_cache
+.ruff_cache
+htmlcov
+.coverage
+coverage.xml
+*.egg-info
+build
+dist
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+
+# Local dev / cache
+.venv
+venv
+.env
+.env.*
+node_modules
+
+# Docs / non-runtime
+docs
+scripts
+tests
+notebooks
+*.ipynb
+
+# Big binary outputs
+*.mp4
+*.gif
+*.png
+*.jpg
+*.jpeg
+*.pdf

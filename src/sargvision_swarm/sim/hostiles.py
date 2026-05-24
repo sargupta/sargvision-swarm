@@ -17,15 +17,14 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-
 THREAT_MIX = (("decoy", 0.40), ("kinetic", 0.50), ("nuisance", 0.10))
 # Per-class observable signatures (rcs, rf_emit, traj_jerk_rate) — units 0..1.
 # decoy:    Luneburg lens inflates RCS, overpowered emitters, loiter jitter.
 # kinetic:  small RCS, mild emit, smooth ballistic.
 # nuisance: tiny RCS, minimal emit, drift.
 CLASS_SIGNATURE = {
-    "decoy":    {"rcs": 0.85, "rf_emit": 0.80, "jerk_rate": 0.70},
-    "kinetic":  {"rcs": 0.35, "rf_emit": 0.45, "jerk_rate": 0.15},
+    "decoy": {"rcs": 0.85, "rf_emit": 0.80, "jerk_rate": 0.70},
+    "kinetic": {"rcs": 0.35, "rf_emit": 0.45, "jerk_rate": 0.15},
     "nuisance": {"rcs": 0.10, "rf_emit": 0.10, "jerk_rate": 0.45},
 }
 
@@ -33,18 +32,18 @@ CLASS_SIGNATURE = {
 @dataclass
 class Hostile:
     id: int
-    pos: np.ndarray            # (3,)
-    vel: np.ndarray            # (3,)
+    pos: np.ndarray  # (3,)
+    vel: np.ndarray  # (3,)
     alive: bool = True
     spawn_bearing_deg: float = 0.0
     intent_label: str = "INBOUND"
     callsign: str = ""
     assigned_to: int | None = None  # drone_id of friendly intercepting
-    threat_class: str = "kinetic"   # ground truth (hidden from defender)
-    rcs: float = 0.5                # noisy observable
-    rf_emit: float = 0.5            # noisy observable
-    traj_jerk: float = 0.2          # rolling jitter signal
-    panic_level: float = 0.0        # SIR-style fear contagion I_j ∈ [0, 1]
+    threat_class: str = "kinetic"  # ground truth (hidden from defender)
+    rcs: float = 0.5  # noisy observable
+    rf_emit: float = 0.5  # noisy observable
+    traj_jerk: float = 0.2  # rolling jitter signal
+    panic_level: float = 0.0  # SIR-style fear contagion I_j ∈ [0, 1]
     _prev_vel: np.ndarray | None = None
 
 
@@ -53,8 +52,8 @@ class HostileFleet:
     """Manages a fleet of hostile drones converging on the friendly centroid."""
 
     spawn_count: int = 12
-    spawn_radius_m: float = 40.0     # sim units (before geo scale)
-    cruise_speed_ms: float = 1.0     # sim units / sec
+    spawn_radius_m: float = 40.0  # sim units (before geo scale)
+    cruise_speed_ms: float = 1.0  # sim units / sec
     engagement_radius_m: float = 2.5
     seed: int = 7
 

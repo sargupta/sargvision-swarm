@@ -25,17 +25,18 @@ from sargvision_swarm.orchestrator.chanakya import (
 )
 from sargvision_swarm.sim.defense_field import DefenseField
 
-
 # ── 1. Threat field ──────────────────────────────────────────────────
 
 
 def test_threat_decays_with_distance():
     a = DefenseAsset(pos=np.array([0.0, 0.0, 0.0]), engagement_radius=5.0, name="S400")
-    queries = np.array([
-        [0.0, 0.0, 0.0],   # at radar
-        [5.0, 0.0, 0.0],   # 1σ
-        [25.0, 0.0, 0.0],  # 5σ — should be ~0
-    ])
+    queries = np.array(
+        [
+            [0.0, 0.0, 0.0],  # at radar
+            [5.0, 0.0, 0.0],  # 1σ
+            [25.0, 0.0, 0.0],  # 5σ — should be ~0
+        ]
+    )
     phi = threat_field(queries, [a])
     assert phi[0] > phi[1] > phi[2]
     assert phi[2] < 1e-6
@@ -64,7 +65,7 @@ def test_conformal_factor_inflates_near_threat():
     sg_low = conformal_factor(phi_low, MetricParams(beta=1.5, gamma=2.0))
     sg_high = conformal_factor(phi_high, MetricParams(beta=1.5, gamma=2.0))
     assert sg_high > sg_low
-    assert sg_low[0] == 1.0   # vacuum metric = identity → sqrt(g) = 1
+    assert sg_low[0] == 1.0  # vacuum metric = identity → sqrt(g) = 1
 
 
 # ── 3. Grid-Dijkstra geodesic ────────────────────────────────────────
@@ -120,8 +121,9 @@ def test_geodesic_falls_back_on_unreachable():
 
 def test_defense_field_iads_layout_and_kill_check():
     df = DefenseField(seed=0)
-    df.spawn_iads_layout(np.array([0.0, 0.0, 0.0]), ring_radius=10.0, n_radars=4,
-                         engagement_radius=3.0)
+    df.spawn_iads_layout(
+        np.array([0.0, 0.0, 0.0]), ring_radius=10.0, n_radars=4, engagement_radius=3.0
+    )
     assert len(df.assets) == 4
     # A drone right next to one of the radars is killed.
     radar_pos = df.assets[0].pos
@@ -148,8 +150,9 @@ def test_chanakya_plan_swarm_produces_per_drone_paths():
     swarm_pos = np.array([[-12.0, -8.0 + 2 * i, 6.0] for i in range(n)])
     targets = np.array([[12.0, -8.0 + 2 * i, 6.0] for i in range(n)])
     df = DefenseField(seed=0)
-    df.spawn_iads_layout(np.array([0.0, 0.0, 0.0]), ring_radius=8.0, n_radars=4,
-                         engagement_radius=3.5)
+    df.spawn_iads_layout(
+        np.array([0.0, 0.0, 0.0]), ring_radius=8.0, n_radars=4, engagement_radius=3.5
+    )
     state = ChanakyaState()
     plans = chanakya_plan_swarm(swarm_pos, targets, df.active, state)
     assert set(plans.keys()) == set(range(n))
@@ -195,11 +198,17 @@ def test_plan_summary_reports_savings():
     swarm_pos = np.array([[-12.0, -4.0 + 4 * i, 6.0] for i in range(n)])
     targets = np.array([[12.0, -4.0 + 4 * i, 6.0] for i in range(n)])
     df = DefenseField(seed=0)
-    df.spawn_iads_layout(np.array([0.0, 0.0, 0.0]), ring_radius=8.0, n_radars=4,
-                         engagement_radius=3.5)
+    df.spawn_iads_layout(
+        np.array([0.0, 0.0, 0.0]), ring_radius=8.0, n_radars=4, engagement_radius=3.5
+    )
     state = ChanakyaState()
-    chanakya_plan_swarm(swarm_pos, targets, df.active, state,
-                        params=ChanakyaParams(metric=MetricParams(beta=3.0, gamma=2.0)))
+    chanakya_plan_swarm(
+        swarm_pos,
+        targets,
+        df.active,
+        state,
+        params=ChanakyaParams(metric=MetricParams(beta=3.0, gamma=2.0)),
+    )
     s = plan_summary(state)
     assert s["n_drones_planned"] == n
     assert s["mean_savings_ratio"] >= 0

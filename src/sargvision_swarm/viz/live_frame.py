@@ -20,14 +20,12 @@ import io
 import math
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Literal
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from sargvision_swarm.comms.protocols import Protocol, WireMessage
+from sargvision_swarm.comms.protocols import Protocol
 from sargvision_swarm.core.state import Role, SwarmState
-
 
 # ── Layout ──────────────────────────────────────────────────────────────
 
@@ -35,7 +33,7 @@ CANVAS_W = 1000
 CANVAS_H = 700
 TITLE_H = 64
 LEGEND_H = 40
-WORLD_X_RANGE = (-30.0, 30.0)   # meters
+WORLD_X_RANGE = (-30.0, 30.0)  # meters
 WORLD_Y_RANGE = (-30.0, 30.0)
 
 
@@ -56,16 +54,16 @@ ROLE_COLOR = {
 }
 
 PROTOCOL_COLOR = {
-    Protocol.A2A: (167, 139, 250),       # purple
-    Protocol.MCP: (244, 114, 182),       # pink
-    Protocol.MAVLINK: (52, 211, 153),    # green
-    Protocol.ZENOH: (96, 165, 250),      # blue
+    Protocol.A2A: (167, 139, 250),  # purple
+    Protocol.MCP: (244, 114, 182),  # pink
+    Protocol.MAVLINK: (52, 211, 153),  # green
+    Protocol.ZENOH: (96, 165, 250),  # blue
     Protocol.DDS: (96, 165, 250),
-    Protocol.GRPC: (251, 146, 60),       # orange
-    Protocol.BFT: (248, 113, 113),       # red
+    Protocol.GRPC: (251, 146, 60),  # orange
+    Protocol.BFT: (248, 113, 113),  # red
 }
 
-EDGE_COLOR = (16, 185, 129, 50)          # rgba dimmed green
+EDGE_COLOR = (16, 185, 129, 50)  # rgba dimmed green
 TRAIL_BASE = (96, 165, 250)
 
 
@@ -246,7 +244,9 @@ def render_frame(
         r = int(7 * z_scale)
         # Halo if Byzantine flash or BFT voter
         if bft_flash_voters and d.id in bft_flash_voters:
-            draw.ellipse((x - r - 5, y - r - 5, x + r + 5, y + r + 5), outline=(252, 211, 77), width=2)
+            draw.ellipse(
+                (x - r - 5, y - r - 5, x + r + 5, y + r + 5), outline=(252, 211, 77), width=2
+            )
         # Disc
         draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
         # ID

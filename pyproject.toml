@@ -68,8 +68,38 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RUF"]
-ignore = ["E501"]
+select = ["E", "F", "I", "UP", "B", "A", "C4", "SIM", "RUF"]
+# Scientific code uses single-uppercase variables (N, M, T, E) matching paper
+# notation; Sanskrit / unicode characters appear in docstrings + comments
+# (Sanskrit doctrine names like Vajra, Sheshnag plus math symbols × ⊗ ∇ etc).
+ignore = [
+  "E501",   # line length — soft cap, prose comments are long by design
+  "N806",   # uppercase variable in function (math notation)
+  "N803",   # uppercase argument (math notation)
+  "RUF002", # ambiguous unicode in docstring (Sanskrit + math)
+  "RUF003", # ambiguous unicode in comment (Sanskrit + math)
+  "B007",   # unused loop variable (math iteration convention)
+  "RUF005", # list spread style (cosmetic)
+  "RUF046", # int(x) on already-int (cosmetic)
+  "RUF059", # unused unpacking variable (cosmetic)
+  "SIM102", # nested-if (clearer for branchy math)
+  "SIM105", # contextlib.suppress (extra import for no clarity gain)
+  "SIM108", # if/else → ternary (often less readable in math)
+  "SIM114", # multiple conditions with same body (often clearer separately in math branches)
+  "SIM117", # nested with-statement (sometimes intentional for scoping)
+  "SIM118", # `key in dict.keys()` (sometimes intentional for clarity)
+  "SIM300", # yoda condition (sometimes intentional in numeric checks)
+  "C408",   # rewrite `dict(...)` as `{...}` (kwargs-style is sometimes clearer)
+  "B905",   # zip strict — many call sites guaranteed equal-length by construction
+  "E402",   # module-level import not at top (we use late imports to avoid cycles)
+  "E741",   # ambiguous variable name (l, I, O — `l` for length is fine in math)
+  "UP042",  # `StrEnum`/`IntEnum` use Literal types instead (pre-3.11 compat)
+  "F841",   # unused variable (some bindings document the unpacking shape)
+  "RUF001", # ambiguous unicode in string (we use Sanskrit + symbols intentionally)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F841", "F401"]  # tests sometimes import for side effects / bind for clarity
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

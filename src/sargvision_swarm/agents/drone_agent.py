@@ -34,7 +34,9 @@ class Observation(BaseModel):
 class AgentDecision(BaseModel):
     """High-level intent emitted by LLM agent."""
 
-    intent: str = Field(description="One of: hold_formation, advance_to_goal, yield_to_neighbor, rotate_role, report_health")
+    intent: str = Field(
+        description="One of: hold_formation, advance_to_goal, yield_to_neighbor, rotate_role, report_health"
+    )
     rationale: str = Field(default="")
 
 
@@ -55,11 +57,11 @@ class DroneAgent:
         if self.backend is None:
             self.backend = make_backend()
 
-    def observe(self, drone: DroneState, neighbors: list[DroneState], phase: str = "idle") -> Observation:
+    def observe(
+        self, drone: DroneState, neighbors: list[DroneState], phase: str = "idle"
+    ) -> Observation:
         if neighbors:
-            distances = [
-                float(np.linalg.norm(drone.pos - n.pos)) for n in neighbors
-            ]
+            distances = [float(np.linalg.norm(drone.pos - n.pos)) for n in neighbors]
             nearest = min(distances)
         else:
             nearest = float("inf")

@@ -30,7 +30,7 @@ def test_boids_separation_pushes_close_drones_apart():
 
 def test_bvc_does_not_modify_safe_velocity():
     positions = np.array([[0.0, 0.0, 5.0], [10.0, 0.0, 5.0]])  # far apart
-    desired = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])     # moving toward each other slowly
+    desired = np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]])  # moving toward each other slowly
     safe = bvc_safe_velocity(positions, desired, safety_radius=0.5, dt=0.1)
     # 10 m apart, moving at 1 m/s for 0.1 s → 0.1 m closer. Safe.
     np.testing.assert_allclose(safe, desired, atol=1e-6)
@@ -59,7 +59,9 @@ def test_compose_reflex_runs_all_scenarios():
     positions = np.array([[0.0, 0.0, 5.0], [2.0, 0.0, 5.0], [4.0, 0.0, 5.0]])
     velocities = np.zeros((3, 3))
     for algo in ("boids", "olfati_saber"):
-        out = compose_reflex(positions, velocities, algorithm=algo, goal_pos=np.array([10.0, 0.0, 5.0]))
+        out = compose_reflex(
+            positions, velocities, algorithm=algo, goal_pos=np.array([10.0, 0.0, 5.0])
+        )
         assert out.shape == (3, 3)
         assert np.isfinite(out).all()
 

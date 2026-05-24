@@ -19,7 +19,6 @@ from sargvision_swarm.comms.protocols import (
     A2ACard,
     A2AMessage,
     HeartbeatPayload,
-    IntentPayload,
     PosePayload,
     Protocol,
     WireMessage,

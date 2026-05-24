@@ -15,12 +15,12 @@ import numpy as np
 class OlfatiSaberParams:
     interaction_range: float = 6.0
     desired_spacing: float = 2.5
-    epsilon: float = 0.1                # σ-norm parameter
-    c1_alpha: float = 1.0               # cohesion / spacing gain
-    c2_alpha: float = 0.8               # velocity-matching gain
-    c1_gamma: float = 0.6               # goal-seeking gain (position)
-    c2_gamma: float = 0.4               # goal-tracking gain (velocity)
-    h_bump: float = 0.2                 # bump function transition
+    epsilon: float = 0.1  # σ-norm parameter
+    c1_alpha: float = 1.0  # cohesion / spacing gain
+    c2_alpha: float = 0.8  # velocity-matching gain
+    c1_gamma: float = 0.6  # goal-seeking gain (position)
+    c2_gamma: float = 0.4  # goal-tracking gain (velocity)
+    h_bump: float = 0.2  # bump function transition
     max_speed: float = 5.0
 
 
@@ -100,14 +100,14 @@ def olfati_saber_velocity(
     d_alpha = _sigma_norm_scalar(d, eps)
 
     # Pairwise offsets
-    offsets = positions[None, :, :] - positions[:, None, :]      # (N, N, 3)
-    norms_sigma = _sigma_norm(offsets, eps)                      # (N, N)
-    grads = _sigma_gradient(offsets, eps)                        # (N, N, 3)
+    offsets = positions[None, :, :] - positions[:, None, :]  # (N, N, 3)
+    norms_sigma = _sigma_norm(offsets, eps)  # (N, N)
+    grads = _sigma_gradient(offsets, eps)  # (N, N, 3)
 
     # α-α gradient term
     phi = _phi_alpha(norms_sigma, r_alpha, d_alpha, params.h_bump)  # (N, N)
     np.fill_diagonal(phi, 0.0)
-    u_alpha_pos = (phi[..., None] * grads).sum(axis=1)              # (N, 3)
+    u_alpha_pos = (phi[..., None] * grads).sum(axis=1)  # (N, 3)
 
     # α-α velocity consensus (within neighborhood)
     in_range = (norms_sigma < r_alpha) & ~np.eye(n, dtype=bool)
@@ -118,8 +118,8 @@ def olfati_saber_velocity(
     u_alpha = params.c1_alpha * u_alpha_pos + params.c2_alpha * u_alpha_vel
 
     # γ-agent (goal) navigation
-    pos_err = goal_pos[None, :] - positions                       # (N, 3)
-    vel_err = goal_vel[None, :] - velocities                      # (N, 3)
+    pos_err = goal_pos[None, :] - positions  # (N, 3)
+    vel_err = goal_vel[None, :] - velocities  # (N, 3)
     u_gamma = params.c1_gamma * pos_err + params.c2_gamma * vel_err
 
     accel = u_alpha + u_gamma

@@ -38,6 +38,7 @@ def sim(
     if snapshot:
         png = swarm_to_mpl_snapshot(final, title=f"{scenario} · t={final.t:.1f}s")
         from pathlib import Path
+
         Path(snapshot).write_bytes(png)
         console.print(f"Wrote snapshot → {snapshot}")
 

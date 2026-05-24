@@ -24,7 +24,7 @@ class Task:
 
 @dataclass
 class EDCBBA:
-    drones_pos: np.ndarray         # (N, 3)
+    drones_pos: np.ndarray  # (N, 3)
     tasks: list[Task]
     bundle_size: int = 3
 

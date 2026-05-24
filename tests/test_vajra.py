@@ -26,7 +26,6 @@ from sargvision_swarm.orchestrator.vajra import (
     vajra_assign,
 )
 
-
 # ── 1. Tropical assignment ────────────────────────────────────────────
 
 
@@ -44,22 +43,26 @@ def test_tropical_matches_hungarian_on_random_4x4():
 
 def test_tropical_drops_zero_priority_rows():
     """A friendly with zero priority everywhere must not be assigned."""
-    C = np.array([
-        [1.0, 0.5],
-        [0.0, 0.0],  # kill-switched
-        [0.8, 0.3],
-    ])
+    C = np.array(
+        [
+            [1.0, 0.5],
+            [0.0, 0.0],  # kill-switched
+            [0.8, 0.3],
+        ]
+    )
     assign = tropical_attention_assignment(C, beta=10.0)
     assert 1 not in assign
 
 
 def test_tropical_rectangular_more_friendlies_than_hostiles():
-    C = np.array([
-        [0.9, 0.4],
-        [0.7, 0.6],
-        [0.3, 0.2],
-        [0.1, 0.5],
-    ])
+    C = np.array(
+        [
+            [0.9, 0.4],
+            [0.7, 0.6],
+            [0.3, 0.2],
+            [0.1, 0.5],
+        ]
+    )
     assign = tropical_attention_assignment(C, beta=12.0)
     # Each column claimed exactly once.
     assert sorted(assign.values()) == [0, 1]
@@ -71,8 +74,11 @@ def test_tropical_rectangular_more_friendlies_than_hostiles():
 def test_break_even_unjammed_baseline():
     # M=100, a=b → N* = M = 100; with 10% safety margin → 110.
     n = break_even_interceptors(
-        hostiles=100, friendly_kill_rate=1.0, hostile_kill_rate=1.0,
-        jamming_factor=0.0, safety_margin=1.10,
+        hostiles=100,
+        friendly_kill_rate=1.0,
+        hostile_kill_rate=1.0,
+        jamming_factor=0.0,
+        safety_margin=1.10,
     )
     assert n == 110
 
@@ -80,20 +86,29 @@ def test_break_even_unjammed_baseline():
 def test_break_even_favourable_ratio():
     # Sting:Shahed — a=5×b → N* = M*sqrt(b/a) = 100*sqrt(0.2) ≈ 44.7
     n = break_even_interceptors(
-        hostiles=100, friendly_kill_rate=5.0, hostile_kill_rate=1.0,
-        jamming_factor=0.0, safety_margin=1.0,
+        hostiles=100,
+        friendly_kill_rate=5.0,
+        hostile_kill_rate=1.0,
+        jamming_factor=0.0,
+        safety_margin=1.0,
     )
     assert 44 <= n <= 50
 
 
 def test_break_even_jamming_inflates_requirement():
     n_clear = break_even_interceptors(
-        hostiles=600, friendly_kill_rate=1.0, hostile_kill_rate=1.0,
-        jamming_factor=0.0, safety_margin=1.0,
+        hostiles=600,
+        friendly_kill_rate=1.0,
+        hostile_kill_rate=1.0,
+        jamming_factor=0.0,
+        safety_margin=1.0,
     )
     n_jammed = break_even_interceptors(
-        hostiles=600, friendly_kill_rate=1.0, hostile_kill_rate=1.0,
-        jamming_factor=0.5, safety_margin=1.0,
+        hostiles=600,
+        friendly_kill_rate=1.0,
+        hostile_kill_rate=1.0,
+        jamming_factor=0.5,
+        safety_margin=1.0,
     )
     # Jamming should *reduce* required friendly mass (κ_jam penalises hostile),
     # not inflate — confirms the inequality direction in the formulation.
@@ -104,11 +119,13 @@ def test_break_even_jamming_inflates_requirement():
 
 
 def test_voronoi_assigns_nearest_initially():
-    positions = np.array([
-        [0.0, 0.0, 0.0],
-        [10.0, 0.0, 0.0],
-        [5.0, 8.0, 0.0],
-    ])
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [5.0, 8.0, 0.0],
+        ]
+    )
     state = VoronoiHysteresisState()
     owner = state.cell_owner(positions, hostile_id=42, hostile_pos=np.array([1.0, 0.0, 0.0]))
     assert owner == 0
@@ -158,20 +175,26 @@ def test_lambda2_positive_on_connected_ring():
 
 def test_vajra_assigns_only_to_high_priority_pairs():
     # 3 friendlies × 2 hostiles. Friendly 0 best on hostile 0; friendly 2 best on hostile 1.
-    priority = np.array([
-        [3.0, 0.5],
-        [0.2, 0.1],
-        [0.4, 2.5],
-    ])
-    friendly_pos = np.array([
-        [0.0, 0.0, 0.0],
-        [5.0, 0.0, 0.0],
-        [10.0, 0.0, 0.0],
-    ])
-    hostile_pos = np.array([
-        [-1.0, 0.0, 0.0],
-        [11.0, 0.0, 0.0],
-    ])
+    priority = np.array(
+        [
+            [3.0, 0.5],
+            [0.2, 0.1],
+            [0.4, 2.5],
+        ]
+    )
+    friendly_pos = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+        ]
+    )
+    hostile_pos = np.array(
+        [
+            [-1.0, 0.0, 0.0],
+            [11.0, 0.0, 0.0],
+        ]
+    )
     # All-to-all comms.
     adj = np.ones((3, 3)) - np.eye(3)
     state = VajraState()
@@ -193,22 +216,28 @@ def test_vajra_assigns_only_to_high_priority_pairs():
 
 def test_vajra_falls_back_to_per_component_under_fragmentation():
     # 4 friendlies, 2 disconnected pairs. Each pair has 1 hostile in range.
-    priority = np.array([
-        [2.0, 0.0],
-        [1.5, 0.0],
-        [0.0, 2.0],
-        [0.0, 1.5],
-    ])
-    friendly_pos = np.array([
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [100.0, 0.0, 0.0],
-        [101.0, 0.0, 0.0],
-    ])
-    hostile_pos = np.array([
-        [0.5, 0.0, 0.0],
-        [100.5, 0.0, 0.0],
-    ])
+    priority = np.array(
+        [
+            [2.0, 0.0],
+            [1.5, 0.0],
+            [0.0, 2.0],
+            [0.0, 1.5],
+        ]
+    )
+    friendly_pos = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [100.0, 0.0, 0.0],
+            [101.0, 0.0, 0.0],
+        ]
+    )
+    hostile_pos = np.array(
+        [
+            [0.5, 0.0, 0.0],
+            [100.5, 0.0, 0.0],
+        ]
+    )
     adj = np.zeros((4, 4))
     adj[0, 1] = adj[1, 0] = 1
     adj[2, 3] = adj[3, 2] = 1

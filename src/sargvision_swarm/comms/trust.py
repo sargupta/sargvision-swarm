@@ -1,5 +1,7 @@
 """PageRank-style damped trust propagation over comm graph, weighted by loyalty."""
+
 from __future__ import annotations
+
 import numpy as np
 
 

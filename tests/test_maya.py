@@ -19,16 +19,17 @@ from sargvision_swarm.orchestrator.maya import (
     wasserstein_dro_inner,
 )
 
-
 # ── 1. Nash replicator ────────────────────────────────────────────────
 
 
 def test_replicator_converges_to_matching_pennies_nash():
     # Matching pennies: row maximises, col minimises; unique Nash = (0.5, 0.5).
-    payoff = np.array([
-        [+1.0, -1.0],
-        [-1.0, +1.0],
-    ])
+    payoff = np.array(
+        [
+            [+1.0, -1.0],
+            [-1.0, +1.0],
+        ]
+    )
     mu_f, mu_h = nash_replicator(payoff, iters=2000, lr=0.05)
     assert abs(mu_f[0] - 0.5) < 0.05, f"row Nash: {mu_f}"
     assert abs(mu_h[0] - 0.5) < 0.05, f"col Nash: {mu_h}"
@@ -36,10 +37,12 @@ def test_replicator_converges_to_matching_pennies_nash():
 
 def test_replicator_pure_strategy_when_dominant():
     # Row 0 dominates row 1 in every column → friendly should put all mass on row 0.
-    payoff = np.array([
-        [+2.0, +3.0],
-        [-1.0, +0.5],
-    ])
+    payoff = np.array(
+        [
+            [+2.0, +3.0],
+            [-1.0, +0.5],
+        ]
+    )
     mu_f, _ = nash_replicator(payoff, iters=500, lr=0.1)
     assert mu_f[0] > 0.95, f"dominant strategy not selected: {mu_f}"
 
@@ -49,9 +52,12 @@ def test_replicator_pure_strategy_when_dominant():
 
 def test_dro_shifts_hostile_to_worst_case_within_ball():
     mu_F = np.array([0.0, 1.0, 0.0, 0.0, 0.0])  # all-intercept
-    mu_H_hat = np.array([0.4, 0.5, 0.1])         # mostly kinetic
+    mu_H_hat = np.array([0.4, 0.5, 0.1])  # mostly kinetic
     mu_H_worst, val_dro = wasserstein_dro_inner(
-        mu_F, DEFAULT_PAYOFF, mu_H_hat, epsilon=0.20,
+        mu_F,
+        DEFAULT_PAYOFF,
+        mu_H_hat,
+        epsilon=0.20,
     )
     # Adversary should shift mass AWAY from kinetic (row 'intercept' beats kinetic)
     # and TOWARD decoy (row 'intercept' loses to decoy).
@@ -75,11 +81,13 @@ def test_dro_collapses_to_empirical_when_epsilon_zero():
 def test_persuasion_picks_high_entropy_signal():
     # Three signals: first is informative (delta), third is uniform-likelihood (uninformative).
     prior = np.array([0.5, 0.5])
-    likelihoods = np.array([
-        [1.0, 0.0],   # signal 0 → fully reveals intent 0
-        [0.0, 1.0],   # signal 1 → fully reveals intent 1
-        [0.5, 0.5],   # signal 2 → uninformative (preserves prior entropy)
-    ])
+    likelihoods = np.array(
+        [
+            [1.0, 0.0],  # signal 0 → fully reveals intent 0
+            [0.0, 1.0],  # signal 1 → fully reveals intent 1
+            [0.5, 0.5],  # signal 2 → uninformative (preserves prior entropy)
+        ]
+    )
     sig, H, post = bayesian_persuasion(likelihoods, prior)
     assert sig == 2, f"persuasion should pick uninformative signal, got {sig}"
     assert abs(H - shannon_entropy(prior)) < 1e-6

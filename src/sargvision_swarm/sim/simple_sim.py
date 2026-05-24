@@ -15,12 +15,12 @@ from sargvision_swarm.core.state import SwarmState
 
 @dataclass
 class SimConfig:
-    dt: float = 0.05                  # 20 Hz step
-    max_accel: float = 6.0            # m/s² — quadrotor-ish
-    velocity_tau: float = 0.25        # first-order vel tracking time constant
-    wind_std: float = 0.0             # m/s noise on velocity each step
+    dt: float = 0.05  # 20 Hz step
+    max_accel: float = 6.0  # m/s² — quadrotor-ish
+    velocity_tau: float = 0.25  # first-order vel tracking time constant
+    wind_std: float = 0.0  # m/s noise on velocity each step
     world_bounds: tuple[float, float, float] = (60.0, 60.0, 30.0)
-    z_floor: float = 0.5              # don't dip below this
+    z_floor: float = 0.5  # don't dip below this
 
 
 class SimpleSim:
@@ -38,9 +38,7 @@ class SimpleSim:
     def step(self, swarm: SwarmState, velocity_cmd: np.ndarray) -> None:
         """Advance the swarm one timestep."""
         if velocity_cmd.shape != (swarm.n, 3):
-            raise ValueError(
-                f"velocity_cmd shape {velocity_cmd.shape} != ({swarm.n}, 3)"
-            )
+            raise ValueError(f"velocity_cmd shape {velocity_cmd.shape} != ({swarm.n}, 3)")
 
         dt = self.cfg.dt
         current_vel = swarm.velocities

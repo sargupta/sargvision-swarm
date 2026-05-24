@@ -14,18 +14,18 @@ import numpy as np
 class BoidsParams:
     """Boids tuning parameters."""
 
-    perception_radius: float = 8.0      # meters
-    separation_radius: float = 2.0      # too-close threshold
+    perception_radius: float = 8.0  # meters
+    separation_radius: float = 2.0  # too-close threshold
     weight_separation: float = 1.6
     weight_alignment: float = 1.0
     weight_cohesion: float = 0.8
-    max_speed: float = 4.0              # m/s (Vásárhelyi 2018 used 8 m/s)
+    max_speed: float = 4.0  # m/s (Vásárhelyi 2018 used 8 m/s)
 
 
 def _pairwise_offsets(positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return (offsets, distances). offsets[i, j] = pos[j] - pos[i]."""
     offsets = positions[None, :, :] - positions[:, None, :]  # (N, N, 3)
-    distances = np.linalg.norm(offsets, axis=-1)             # (N, N)
+    distances = np.linalg.norm(offsets, axis=-1)  # (N, N)
     return offsets, distances
 
 
@@ -51,12 +51,12 @@ def boids_velocity(
     self_mask = np.eye(n, dtype=bool)
     distances_masked = np.where(self_mask, np.inf, distances)
 
-    neighbors = distances_masked < params.perception_radius        # (N, N) bool
+    neighbors = distances_masked < params.perception_radius  # (N, N) bool
     too_close = distances_masked < params.separation_radius
 
     # --- Separation: push away from too-close neighbors, weighted by inverse distance.
     eps = 1e-6
-    push = -offsets / (distances_masked[..., None] + eps)          # unit vec away
+    push = -offsets / (distances_masked[..., None] + eps)  # unit vec away
     push_weight = too_close.astype(np.float64)
     sep_count = push_weight.sum(axis=1, keepdims=True)
     sep_count = np.where(sep_count == 0, 1.0, sep_count)

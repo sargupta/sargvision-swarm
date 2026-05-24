@@ -13,6 +13,7 @@ import math
 DEFAULT_ANCHOR_LAT = 34.1526
 DEFAULT_ANCHOR_LON = 77.5770
 
+
 # How many *world* meters one degree latitude / longitude is at the anchor.
 def meters_per_deg(lat: float) -> tuple[float, float]:
     lat_rad = math.radians(lat)

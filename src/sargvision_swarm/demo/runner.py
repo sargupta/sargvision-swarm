@@ -19,7 +19,7 @@ from sargvision_swarm.comms import (
     WireMessage,
 )
 from sargvision_swarm.comms.protocols import IntentPayload
-from sargvision_swarm.core import ReflexParams, SwarmState, compose_reflex
+from sargvision_swarm.core import SwarmState, compose_reflex
 from sargvision_swarm.orchestrator import EDCBBA, MissionGoal, MissionPlanner, SwarmRaft, Task
 from sargvision_swarm.sim import SimConfig, SimpleSim
 
@@ -85,6 +85,7 @@ def rollout(
             )
             slot_pull = (per_drone_goal - positions) * 1.4 - velocities * 0.6
             from sargvision_swarm.core.bvc import bvc_safe_velocity
+
             v_cmd = bvc_safe_velocity(positions, slot_pull, safety_radius=0.9, dt=0.1)
         elif plan.scenario == "coverage":
             per_drone_goal = np.array(
@@ -92,11 +93,14 @@ def rollout(
             )
             slot_pull = (per_drone_goal - positions) * 1.2 - velocities * 0.5
             from sargvision_swarm.core.bvc import bvc_safe_velocity
+
             v_cmd = bvc_safe_velocity(positions, slot_pull, safety_radius=1.0, dt=0.1)
         elif plan.scenario == "hover":
             v_cmd = (goal_pos - positions) * 1.0 - velocities * 0.8
         else:
-            v_cmd = compose_reflex(positions, velocities, algorithm=plan.algorithm, goal_pos=goal_pos)
+            v_cmd = compose_reflex(
+                positions, velocities, algorithm=plan.algorithm, goal_pos=goal_pos
+            )
 
         sim.step(swarm, v_cmd)
 
@@ -114,6 +118,7 @@ def rollout(
                 raw = backend.complete("be terse", user, max_tokens=64)
                 try:
                     import json
+
                     data = json.loads(raw)
                     intent = data.get("intent", "hold_formation")
                 except Exception:

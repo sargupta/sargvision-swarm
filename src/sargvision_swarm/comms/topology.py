@@ -13,9 +13,9 @@ import numpy as np
 
 @dataclass
 class CommModel:
-    range_m: float = 15.0          # Doodle Labs Mesh Rider-ish indoor range
-    loss_start_m: float = 10.0     # below this, ~0% loss
-    max_loss: float = 0.4          # at range_m, packet loss this high
+    range_m: float = 15.0  # Doodle Labs Mesh Rider-ish indoor range
+    loss_start_m: float = 10.0  # below this, ~0% loss
+    max_loss: float = 0.4  # at range_m, packet loss this high
     rng_seed: int = 0
 
     def __post_init__(self) -> None:

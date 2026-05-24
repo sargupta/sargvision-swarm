@@ -32,17 +32,17 @@ class Zone:
     name: str
     center: tuple[float, float, float]  # sim (x, y, z) metres
     radius_m: float
-    capacity: int                       # max simultaneous drones (governance gate)
-    kind: str = "corridor"              # corridor | start | end | thermal | rest
+    capacity: int  # max simultaneous drones (governance gate)
+    kind: str = "corridor"  # corridor | start | end | thermal | rest
 
     @property
     def color_hex(self) -> str:
         return {
-            "start": "#4AE6A0",        # green
-            "end": "#FFC83D",          # amber
-            "corridor": "#00C2FF",     # cyan
-            "thermal": "#FF8A1F",      # saffron (helpful updraft)
-            "rest": "#A78BFA",         # purple (loiter)
+            "start": "#4AE6A0",  # green
+            "end": "#FFC83D",  # amber
+            "corridor": "#00C2FF",  # cyan
+            "thermal": "#FF8A1F",  # saffron (helpful updraft)
+            "rest": "#A78BFA",  # purple (loiter)
         }.get(self.kind, "#94A3B8")
 
 
@@ -54,16 +54,24 @@ class Hazard:
     name: str
     center: tuple[float, float, float]
     radius_m: float
-    severity: float                     # 0..1, scales movement penalty
-    pulse_phase: float = 0.0            # for visual breathing
+    severity: float  # 0..1, scales movement penalty
+    pulse_phase: float = 0.0  # for visual breathing
 
 
 @dataclass
 class GovernedMigrationField:
-    """The full multi-zone field — zones + hazards + per-drone assignment."""
+    """The full multi-zone field — zones + hazards + per-drone assignment.
+
+    `strategy` selects the corridor-pick policy:
+      "load_balanced"     (default) — distance + hazard + capacity penalty
+      "fastest_corridor"  — concentrate on highest-throughput pass
+      "safest_corridor"   — minimise hazard cost over throughput
+      "adaptive_reroute"  — same as load_balanced but with stronger hazard weighting
+    """
 
     zones: list[Zone] = field(default_factory=list)
     hazards: list[Hazard] = field(default_factory=list)
+    strategy: str = "load_balanced"
     # drone_id → zone_id currently routed to (target waypoint)
     assignment: dict[int, str] = field(default_factory=dict)
     # drone_id → zone_id currently inside (for occupancy count)
@@ -104,27 +112,23 @@ class GovernedMigrationField:
           - Hazards: GLACIER STORM (north), SHEAR FRONT (centre)
         """
         zones: list[Zone] = [
-            Zone("START",    "LEH AIRBASE",      (0, -25, 6), 6.0, capacity=100, kind="start"),
-            Zone("REST_W",   "WESTERN PLAINS",   (-15, -20, 6), 5.0, capacity=18, kind="rest"),
-            Zone("REST_E",   "EASTERN APRON",    (15, -20, 6), 5.0, capacity=18, kind="rest"),
-
+            Zone("START", "LEH AIRBASE", (0, -25, 6), 6.0, capacity=100, kind="start"),
+            Zone("REST_W", "WESTERN PLAINS", (-15, -20, 6), 5.0, capacity=18, kind="rest"),
+            Zone("REST_E", "EASTERN APRON", (15, -20, 6), 5.0, capacity=18, kind="rest"),
             # Northern Khardung La pair — wide capacity, but glacier storm hits
-            Zone("KHARDUNG", "KHARDUNG LA · N",  (-2, 0, 7), 6.0, capacity=40, kind="corridor"),
-            Zone("THERMAL_N","THERMAL UPDRAFT",  (-8, 5, 8), 5.5, capacity=24, kind="thermal"),
-
+            Zone("KHARDUNG", "KHARDUNG LA · N", (-2, 0, 7), 6.0, capacity=40, kind="corridor"),
+            Zone("THERMAL_N", "THERMAL UPDRAFT", (-8, 5, 8), 5.5, capacity=24, kind="thermal"),
             # Western Zoji La — narrow but stable
-            Zone("ZOJI",     "ZOJI LA · W",      (-18, 0, 6), 4.0, capacity=15, kind="corridor"),
-
+            Zone("ZOJI", "ZOJI LA · W", (-18, 0, 6), 4.0, capacity=15, kind="corridor"),
             # Southern Tanglang La — medium, with helpful thermal
-            Zone("TANGLANG", "TANGLANG LA · S",  (6, 0, 7), 5.5, capacity=30, kind="corridor"),
-            Zone("THERMAL_S","HIGH PLAIN LIFT",  (12, 5, 8), 5.0, capacity=20, kind="thermal"),
-
-            Zone("END",      "NUBRA FWD POST",   (0, 25, 6), 6.0, capacity=100, kind="end"),
+            Zone("TANGLANG", "TANGLANG LA · S", (6, 0, 7), 5.5, capacity=30, kind="corridor"),
+            Zone("THERMAL_S", "HIGH PLAIN LIFT", (12, 5, 8), 5.0, capacity=20, kind="thermal"),
+            Zone("END", "NUBRA FWD POST", (0, 25, 6), 6.0, capacity=100, kind="end"),
         ]
         hazards: list[Hazard] = [
-            Hazard("STORM_N", "GLACIER STORM",  (-5, 8, 6), 5.5, severity=0.85),
-            Hazard("SHEAR",   "WIND SHEAR FRONT", (3, -2, 6), 4.0, severity=0.45),
-            Hazard("WX_E",    "EASTERN WX FRONT", (12, 10, 6), 4.5, severity=0.6),
+            Hazard("STORM_N", "GLACIER STORM", (-5, 8, 6), 5.5, severity=0.85),
+            Hazard("SHEAR", "WIND SHEAR FRONT", (3, -2, 6), 4.0, severity=0.45),
+            Hazard("WX_E", "EASTERN WX FRONT", (12, 10, 6), 4.5, severity=0.6),
         ]
         return cls(zones=zones, hazards=hazards)
 
@@ -156,27 +160,43 @@ class GovernedMigrationField:
         return counts
 
     def pick_corridor(self, drone_id: int, drone_pos: np.ndarray) -> Zone:
-        """Drone picks the lowest-cost corridor: hazard + capacity + distance.
+        """Drone picks corridor according to current strategy.
 
-        This is the GOVERNANCE step — each drone selects independently using
-        local information (its own position + last-broadcast occupancy +
-        hazard field). Result is collective load balancing without a central
-        scheduler.
+        Strategies:
+          load_balanced (default) — distance + capacity + hazard weighted equally
+          fastest_corridor — pick the highest-capacity (fastest throughput) pass
+          safest_corridor  — minimise hazard at all costs, ignore capacity
+          adaptive_reroute — same as load_balanced but with 3× hazard weight,
+            making drones aggressively avoid storms when they emerge.
         """
         occ = self.occupancy()
+        candidates = [z for z in self.corridor_zones() if z.id not in self.closed_until]
+        if not candidates:
+            return self.zones[0]
+
+        if self.strategy == "fastest_corridor":
+            # Pick highest-capacity pass irrespective of distance/hazard.
+            return max(candidates, key=lambda z: z.capacity)
+
+        if self.strategy == "safest_corridor":
+            # Pick the pass with the lowest hazard cost on the route.
+            def hazard_score(z: Zone) -> float:
+                mid = (drone_pos + np.array(z.center)) * 0.5
+                return self.hazard_cost(mid)
+
+            return min(candidates, key=hazard_score)
+
+        # load_balanced + adaptive_reroute use weighted-cost selection.
+        hazard_weight = 25.0 if self.strategy == "load_balanced" else 75.0
         best: Zone | None = None
         best_score = float("inf")
-        for z in self.corridor_zones():
-            if z.id in self.closed_until:
-                continue  # Closed pass — drone must route elsewhere
+        for z in candidates:
             zpos = np.array(z.center)
             dist = float(np.linalg.norm(drone_pos[:2] - zpos[:2]))
-            # Capacity penalty — hard wall as we approach the cap
             load = occ.get(z.id, 0) / max(z.capacity, 1)
             cap_penalty = 0.0 if load < 0.7 else (load - 0.7) * 40.0
-            # Hazard penalty — average between drone and zone centre (rough)
             mid = (drone_pos + zpos) * 0.5
-            hazard = self.hazard_cost(mid) * 25.0
+            hazard = self.hazard_cost(mid) * hazard_weight
             score = dist + cap_penalty + hazard
             if score < best_score:
                 best = z
@@ -198,6 +218,7 @@ class GovernedMigrationField:
             corridors = [z for z in self.corridor_zones() if z.id not in self.closed_until]
             if corridors:
                 import random as _r
+
                 pick = _r.choice(corridors)
                 self.closed_until[pick.id] = t + 30.0
                 pick.capacity = 0
@@ -227,8 +248,8 @@ class GovernedMigrationField:
             # First call — assign each storm a small wander velocity
             self.storm_vel = {
                 "STORM_N": (0.03, -0.02),
-                "SHEAR":   (0.04, 0.01),
-                "WX_E":    (-0.025, 0.018),
+                "SHEAR": (0.04, 0.01),
+                "WX_E": (-0.025, 0.018),
             }
         for h in self.hazards:
             h.pulse_phase = (h.pulse_phase + dt * 0.7) % (2 * math.pi)

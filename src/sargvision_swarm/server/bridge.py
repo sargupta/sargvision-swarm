@@ -26,7 +26,6 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import msgpack
-import numpy as np
 import structlog
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -50,12 +49,12 @@ def _classify_intent(intent: str) -> str:
     return intent.replace("_", " ").upper()
 
 
-def _affiliation_for_drone(drone) -> str:  # noqa: ANN001
+def _affiliation_for_drone(drone) -> str:
     # Phase A — all SARGVISION drones friendly. Hostile lane comes in Phase C.
     return "friend"
 
 
-def _platform_for_drone(drone) -> str:  # noqa: ANN001
+def _platform_for_drone(drone) -> str:
     # Map role → platform — looks like a real heterogeneous ORBAT.
     name = drone.role.value if hasattr(drone.role, "value") else str(drone.role)
     return {
@@ -70,6 +69,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
     hostiles = []
     if getattr(session, "hostile_fleet", None) is not None:
         from sargvision_swarm.server.geo import local_to_geo as _local_to_geo
+
         for h in session.hostile_fleet.hostiles:
             lon, lat = _local_to_geo(float(h.pos[0]), float(h.pos[1]))
             posterior = None
@@ -82,6 +82,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                     from sargvision_swarm.orchestrator.shield import (
                         THREAT_CLASSES as _TC,
                     )
+
                     threat_label = str(_TC[int(post.argmax())])
             hostiles.append(
                 {
@@ -96,6 +97,8 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                     "assigned_to": h.assigned_to,
                     "threat_class": threat_label,
                     "posterior": posterior,
+                    # SHESHNAG per-hostile panic level (SIR contagion 0..1)
+                    "panic": float(getattr(h, "panic_level", 0.0)),
                 }
             )
 
@@ -112,6 +115,20 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         and getattr(shield_state, "loyalty", None) is not None
         and shield_state.loyalty.size == session.swarm.n
     )
+
+    # CHANAKYA per-drone geodesic plans — pre-build the lookup for cheap lookup below.
+    _chanakya_state = getattr(session, "chanakya_state", None)
+    _chanakya_geodesics: dict[int, list[list[float]]] = {}
+    if _chanakya_state is not None:
+        for d_idx, plan in (getattr(_chanakya_state, "plans", {}) or {}).items():
+            wps = getattr(plan, "waypoints", None)
+            if wps is None or wps.shape[0] < 2:
+                continue
+            geo_path: list[list[float]] = []
+            for row in wps:
+                glon, glat = local_to_geo(float(row[0]), float(row[1]))
+                geo_path.append([glon, glat])
+            _chanakya_geodesics[int(d_idx)] = geo_path
 
     drones = []
     intercept = getattr(session, "intercept_assignment", {}) or {}
@@ -150,6 +167,8 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
                 "loyalty": loyalty,
                 "trust": trust,
                 "shield_class": shield_class,
+                # CHANAKYA per-drone planned geodesic (list of [lon, lat] waypoints)
+                "geodesic": _chanakya_geodesics.get(int(d.id)),
             }
         )
 
@@ -205,10 +224,18 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
 
     threat = None
     if getattr(session, "hostile_fleet", None) is not None:
+        # Separate intercept-kills from HVT-impact self-destructions.
+        # `fleet.neutralized` counts friendly intercepts only; impacts are
+        # tracked per-HVT in border_strike and summed here.
+        impacted = 0
+        bs = getattr(session, "border_strike", None)
+        if bs is not None:
+            impacted = int(sum(h.hits_taken for h in bs.hvts))
         threat = {
             "total": int(session.hostile_fleet.total),
             "remaining": int(session.hostile_fleet.remaining),
-            "neutralized": int(session.hostile_fleet.neutralized),
+            "neutralized": int(session.hostile_fleet.neutralized),  # friendly-intercepted
+            "impacted": int(impacted),  # HVT-struck self-destructs
         }
     kill_events = []
     now = float(session.swarm.t)
@@ -216,6 +243,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         # Only surface kills from the last 4s so the flash sprite fades naturally.
         if now - float(k["t"]) <= 4.0:
             from sargvision_swarm.server.geo import local_to_geo as _l2g
+
             klon, klat = _l2g(float(k["pos"][0]), float(k["pos"][1]))
             kill_events.append(
                 {
@@ -251,12 +279,99 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
             "n_hostiles_alive": int(threat["remaining"]) if threat else 0,
         }
 
+    # ── MAYA strategic posture summary ──
+    maya_state = getattr(session, "maya_state", None)
+    maya_summary: dict[str, Any] | None = None
+    if maya_state is not None:
+        from sargvision_swarm.orchestrator.maya import POSTURE_ACTIONS as _PA
+
+        posture_arr = getattr(maya_state, "posture", None)
+        if posture_arr is not None and len(posture_arr) == len(_PA):
+            posture_dict = {a: float(posture_arr[i]) for i, a in enumerate(_PA)}
+        else:
+            posture_dict = {a: 1.0 / len(_PA) for a in _PA}
+        hp_est = getattr(maya_state, "hostile_posterior", None)
+        hp_worst = getattr(maya_state, "worst_case_hostile", None)
+        maya_summary = {
+            "posture": posture_dict,
+            "top_posture": max(posture_dict, key=posture_dict.get),
+            "hostile_estimate": [float(x) for x in (hp_est if hp_est is not None else [])],
+            "hostile_worst_case": [float(x) for x in (hp_worst if hp_worst is not None else [])],
+            "classifier_entropy": float(getattr(maya_state, "classifier_entropy", 0.0)),
+            "value": float(getattr(maya_state, "last_value", 0.0)),
+            "n_solves": int(getattr(maya_state, "n_solves", 0)),
+            "last_solved_t": float(getattr(maya_state, "last_solved_t", 0.0)),
+        }
+
+    # ── SHESHNAG offensive psyops summary ──
+    sheshnag_state = getattr(session, "sheshnag_state", None)
+    sheshnag_summary: dict[str, Any] | None = None
+    if sheshnag_state is not None:
+        broadcast_beacons: list[dict[str, float]] = []
+        for tgt in getattr(sheshnag_state, "broadcast_targets", []) or []:
+            from sargvision_swarm.server.geo import local_to_geo as _bcn_l2g
+
+            blon, blat = _bcn_l2g(float(tgt[0]), float(tgt[1]))
+            broadcast_beacons.append({"lon": blon, "lat": blat})
+        phase = getattr(sheshnag_state, "last_phase", {}) or {}
+        sheshnag_summary = {
+            "armed": bool(getattr(session, "sheshnag_armed", False)),
+            "authorized": bool(getattr(sheshnag_state, "authorized", False)),
+            "phase": str(phase.get("phase", "SWARM")),
+            "polarization": float(phase.get("P", 0.0)),
+            "rotation": float(phase.get("R", 0.0)),
+            "mean_panic": float(getattr(sheshnag_state, "mean_panic", 0.0)),
+            "fraction_panicked": float(getattr(sheshnag_state, "fraction_panicked", 0.0)),
+            "broadcasts_emitted": int(getattr(sheshnag_state, "broadcasts_emitted", 0)),
+            "composite_value": float(getattr(sheshnag_state, "composite_value", 0.0)),
+            "beacons": broadcast_beacons,
+        }
+
+    # ── CHANAKYA SEAD-ingress summary (defense field + per-drone plans) ──
+    chanakya_summary: dict[str, Any] | None = None
+    if _chanakya_state is not None:
+        defense_field = getattr(session, "defense_field", None)
+        defense_payload = []
+        if defense_field is not None:
+            from sargvision_swarm.server.geo import local_to_geo as _df_l2g
+
+            for asset in getattr(defense_field, "assets", []) or []:
+                alon, alat = _df_l2g(float(asset.pos[0]), float(asset.pos[1]))
+                defense_payload.append(
+                    {
+                        "name": getattr(asset, "name", "") or "SAM",
+                        "lon": alon,
+                        "lat": alat,
+                        "alt_m": float(asset.pos[2]),
+                        "engagement_radius_m": float(asset.engagement_radius) * 80.0,
+                        "active": bool(asset.active),
+                    }
+                )
+        plans = getattr(_chanakya_state, "plans", {}) or {}
+        action_total = float(sum(getattr(p, "action_cost", 0.0) for p in plans.values()))
+        straight_total = float(sum(getattr(p, "straight_cost", 0.0) for p in plans.values()))
+        savings_ratio = 0.0
+        if straight_total > 1e-9:
+            savings_ratio = max(0.0, 1.0 - action_total / straight_total)
+        chanakya_summary = {
+            "enabled": True,
+            "n_drones_planned": int(len(plans)),
+            "total_action_cost": action_total,
+            "total_straight_cost": straight_total,
+            "mean_savings_ratio": float(savings_ratio),
+            "n_replans": int(getattr(_chanakya_state, "n_plans_total", 0)),
+            "kills": int(getattr(session, "chanakya_kills", 0)),
+            "arrivals": int(getattr(session, "chanakya_arrivals", 0)),
+            "defense_assets": defense_payload,
+        }
+
     # ── GOVERNED MIGRATION zones + hazards + occupancy ──
     migration_field = getattr(session, "migration_field", None)
     migration_summary: dict[str, Any] | None = None
     if migration_field is not None:
         occ = migration_field.occupancy()
         from sargvision_swarm.server.geo import local_to_geo as _mig_l2g
+
         zones_payload = []
         closed_until = getattr(migration_field, "closed_until", {}) or {}
         for z in migration_field.zones:
@@ -298,7 +413,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
             if not pts or len(pts) < 2:
                 continue
             geo_pts = []
-            for (sx, sy) in pts[-40:]:  # cap to last 40 to keep payload small
+            for sx, sy in pts[-40:]:  # cap to last 40 to keep payload small
                 glon, glat = _mig_l2g(float(sx), float(sy))
                 geo_pts.append([glon, glat])
             trails_payload.append({"id": int(did), "path": geo_pts})
@@ -313,9 +428,7 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
             "violations": int(migration_field.violations),
             "collisions": int(migration_field.collisions),
             "yields": int(migration_field.yields),
-            "assignments": {
-                str(k): v for k, v in migration_field.assignment.items()
-            },
+            "assignments": {str(k): v for k, v in migration_field.assignment.items()},
             "closure_events": list(getattr(migration_field, "closure_events", [])),
         }
 
@@ -339,6 +452,90 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         "hijack_active": bool(getattr(session, "hijack_active", False)),
     }
 
+    # ── Operation Trishul: HVTs + phase machine + LoC line + threat arrows ──
+    border_strike = getattr(session, "border_strike", None)
+    trishul_summary: dict[str, Any] | None = None
+    if border_strike is not None:
+        from sargvision_swarm.server.geo import local_to_geo as _bs_l2g
+
+        hvts_payload: list[dict] = []
+        for hvt in border_strike.hvts:
+            hlon, hlat = _bs_l2g(float(hvt.pos[0]), float(hvt.pos[1]))
+            hvts_payload.append(
+                {
+                    "id": hvt.id,
+                    "name": hvt.name,
+                    "kind": hvt.kind,
+                    "lon": hlon,
+                    "lat": hlat,
+                    "health": float(hvt.health),
+                    "status": hvt.status,
+                    "hits_taken": int(hvt.hits_taken),
+                    "impact_radius_m": float(hvt.impact_radius_m * 80.0),
+                }
+            )
+        loc_geo: list[list[float]] = []
+        for sx, sy in border_strike.loc_line:
+            llon, llat = _bs_l2g(float(sx), float(sy))
+            loc_geo.append([llon, llat])
+        axis_arrows: list[dict] = []
+        if session.hostile_fleet is not None:
+            for h in session.hostile_fleet.hostiles:
+                if not getattr(h, "alive", False):
+                    continue
+                tid = getattr(h, "target_hvt", None)
+                if tid is None:
+                    continue
+                hvt = border_strike.hvt_by_id(tid)
+                if hvt is None:
+                    continue
+                hlon, hlat = _bs_l2g(float(h.pos[0]), float(h.pos[1]))
+                tlon, tlat = _bs_l2g(float(hvt.pos[0]), float(hvt.pos[1]))
+                axis_arrows.append(
+                    {
+                        "src": [hlon, hlat],
+                        "dst": [tlon, tlat],
+                        "callsign": getattr(h, "callsign", "HST"),
+                        "target_hvt": tid,
+                    }
+                )
+        trishul_summary = {
+            "hvts": hvts_payload,
+            "loc_line": loc_geo,
+            "axis_arrows": axis_arrows,
+            "phase": border_strike.phase_serialize(float(session.swarm.t)),
+            "all_protected": border_strike.all_hvts_protected(),
+            "all_struck": border_strike.all_hvts_struck(),
+        }
+
+    # ── VYUHA defence-strategy summary + per-HVT metrics ─────────────────
+    vyuha_summary: dict[str, Any] | None = None
+    vplan = getattr(session, "vyuha_plan", None)
+    if vplan is not None:
+        from sargvision_swarm.orchestrator.vyuha import SCENARIO_STRATEGIES
+
+        per_hvt_metrics = []
+        for hvt_id, m in vplan.metrics.items():
+            per_hvt_metrics.append(
+                {
+                    "hvt_id": hvt_id,
+                    "first_detect_t": m.first_detect_t,
+                    "first_hit_t": m.first_hit_t,
+                    "n_drones_allocated": int(m.n_drones_allocated),
+                    "n_intercepts_in_sector": int(m.n_intercepts_in_sector),
+                    "n_kills_in_sector": int(m.n_kills_in_sector),
+                    "mean_intercept_lag_s": float(m.mean_intercept_lag_s),
+                }
+            )
+        vyuha_summary = {
+            "strategy": getattr(session, "vyuha_strategy", "ring_uniform"),
+            "available": list(SCENARIO_STRATEGIES.get(session.scenario, [])),
+            "per_hvt": per_hvt_metrics,
+            "drone_sector": {
+                str(k): v for k, v in (getattr(session, "drone_sector", {}) or {}).items()
+            },
+        }
+
     return {
         "t": float(session.swarm.t),
         "step": int(session.step_i),
@@ -353,7 +550,12 @@ def build_frame(session: LiveSession) -> dict[str, Any]:
         "kill_events": kill_events,
         "shield": shield_summary,
         "vajra": vajra_summary,
+        "maya": maya_summary,
+        "sheshnag": sheshnag_summary,
+        "chanakya": chanakya_summary,
         "migration": migration_summary,
+        "trishul": trishul_summary,
+        "vyuha": vyuha_summary,
         "stats": stats,
         "flags": {
             "jamming": bool(getattr(session, "jamming", False)),
@@ -516,6 +718,27 @@ def healthz() -> dict:
 async def set_scenario(name: str, n: int = 24, seed: int = 42) -> dict:
     await service.start(n_drones=n, scenario=name, seed=seed, comm_range_m=18.0, hz=10.0)
     return {"started": name, "n": n, "seed": seed}
+
+
+@app.post("/vyuha/{strategy}")
+async def set_vyuha_strategy(strategy: str) -> dict:
+    """Hot-swap the VYUHA defence strategy mid-scenario.
+
+    Valid strategies: central | distributed | layered | cap.
+    Only meaningful in border_strike scenario. Reseats friendly drones at the
+    new spawn placements and clears in-flight intercepts.
+    """
+    sess = service.session
+    if sess is None:
+        return {"ok": False, "reason": "no active session"}
+    if not hasattr(sess, "set_vyuha_strategy"):
+        return {"ok": False, "reason": "session does not support vyuha"}
+    ok = sess.set_vyuha_strategy(strategy)
+    return {
+        "ok": bool(ok),
+        "strategy": getattr(sess, "vyuha_strategy", None),
+        "reason": None if ok else f"unrecognised strategy or wrong scenario: {strategy}",
+    }
 
 
 @app.post("/jam")

@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import numpy as np
-
 from sargvision_swarm.comms.topology import CommModel
 from sargvision_swarm.core.state import Role, SwarmState
-
 
 _ROLE_COLOR = {
     Role.WORKER: "#3b82f6",
@@ -60,9 +57,7 @@ def topology_figure(swarm: SwarmState, comm: CommModel, title: str = ""):
         text=[str(d.id) for d in swarm.drones],
         textposition="top center",
         textfont=dict(size=9, color="#475569"),
-        hovertemplate=(
-            "drone %{text}<br>x=%{x:.1f} y=%{y:.1f} z=%{z:.1f}<extra></extra>"
-        ),
+        hovertemplate=("drone %{text}<br>x=%{x:.1f} y=%{y:.1f} z=%{z:.1f}<extra></extra>"),
         name="drones",
     )
 
@@ -126,7 +121,17 @@ def protocol_breakdown_pie(counts: dict[str, int]):
                 labels=list(counts.keys()),
                 values=list(counts.values()),
                 hole=0.5,
-                marker=dict(colors=["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899"]),
+                marker=dict(
+                    colors=[
+                        "#3b82f6",
+                        "#10b981",
+                        "#f59e0b",
+                        "#ef4444",
+                        "#8b5cf6",
+                        "#06b6d4",
+                        "#ec4899",
+                    ]
+                ),
             )
         ],
         layout=go.Layout(

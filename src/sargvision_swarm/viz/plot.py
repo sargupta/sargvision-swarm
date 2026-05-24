@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import io
 
-import numpy as np
-
 from sargvision_swarm.core.state import Role, SwarmState
 
-
 _ROLE_COLOR = {
-    Role.WORKER: "#3b82f6",   # blue
-    Role.SCOUT: "#10b981",    # green
-    Role.RELAY: "#f59e0b",    # amber
-    Role.LEADER: "#ef4444",   # red
+    Role.WORKER: "#3b82f6",  # blue
+    Role.SCOUT: "#10b981",  # green
+    Role.RELAY: "#f59e0b",  # amber
+    Role.LEADER: "#ef4444",  # red
 }
 
 
@@ -75,6 +72,7 @@ def swarm_to_plotly_figure(swarm: SwarmState, title: str = ""):
 def swarm_to_mpl_snapshot(swarm: SwarmState, title: str = "") -> bytes:
     """Render a matplotlib 3D PNG to bytes — used in headless contexts."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
@@ -86,7 +84,13 @@ def swarm_to_mpl_snapshot(swarm: SwarmState, title: str = "") -> bytes:
     colors = [_ROLE_COLOR.get(d.role, "#3b82f6") for d in swarm.drones]
     ax.scatter(positions[:, 0], positions[:, 1], positions[:, 2], c=colors, s=18)
     for p, v in zip(positions, velocities):
-        ax.plot([p[0], p[0] + v[0] * 0.5], [p[1], p[1] + v[1] * 0.5], [p[2], p[2] + v[2] * 0.5], c="#94a3b8", lw=0.8)
+        ax.plot(
+            [p[0], p[0] + v[0] * 0.5],
+            [p[1], p[1] + v[1] * 0.5],
+            [p[2], p[2] + v[2] * 0.5],
+            c="#94a3b8",
+            lw=0.8,
+        )
     ax.set_xlim(-30, 30)
     ax.set_ylim(-30, 30)
     ax.set_zlim(0, 15)

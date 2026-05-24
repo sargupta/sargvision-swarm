@@ -1,0 +1,46 @@
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "Dockerfile"
+      - "fly.toml"
+      - ".dockerignore"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-fly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Fly.io deploy
+    runs-on: ubuntu-latest
+    needs: []
+    environment:
+      name: production
+      url: https://sargvision-swarm-bridge.fly.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy app
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --remote-only --strategy rolling --wait-timeout 300
+      - name: Verify deployment
+        run: |
+          for i in 1 2 3 4 5 6; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://sargvision-swarm-bridge.fly.dev/healthz)
+            if [ "$STATUS" = "200" ]; then
+              echo "Bridge is live: HTTP $STATUS"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS, retrying in 10s..."
+            sleep 10
+          done
+          echo "Bridge failed to come up healthy"
+          exit 1

@@ -10,6 +10,7 @@ A planner's perspective: this is the conformal factor for the Riemannian
 engagement metric g_ij = δ_ij (1 + β Φ)^γ — high-threat regions become
 "longer to traverse" so geodesics curve around them naturally.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -20,10 +21,11 @@ import numpy as np
 @dataclass
 class DefenseAsset:
     """A hostile radar / SAM / EW battery."""
-    pos: np.ndarray             # (3,) world position
-    engagement_radius: float    # ρ_k — effective threat half-width
+
+    pos: np.ndarray  # (3,) world position
+    engagement_radius: float  # ρ_k — effective threat half-width
     active: bool = True
-    name: str = ""              # callsign e.g., "S-400-N1"
+    name: str = ""  # callsign e.g., "S-400-N1"
 
 
 def threat_field(

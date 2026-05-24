@@ -17,6 +17,7 @@ formula in Definition 1; for now we implement the scalar-stalk case, which is wh
 SHIELD and the live counter-swarm scenario actually use. Vector-stalk extension is
 trivial via the block-Kronecker form.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -53,7 +54,11 @@ def fragmentation_index(
     """Φ_T = λ₂(L_T) / λ₂(L_F)  ∈ (0, 1].
 
     Returns 1.0 when trust is uniform (TWSL reduces to vanilla sheaf Laplacian).
-    Theorem 4 guarantees Φ_T ≥ T_min².
+    Theorem 4 guarantees Φ_T ≥ T_min² for CONNECTED graphs.
+
+    Returns NaN if the underlying graph is disconnected (λ₂(L_F) = 0 and the
+    ratio is undefined). Use `connected_components(adjacency)` from
+    `orchestrator/vajra.py` to apply Theorem 4 per-component on a disconnected graph.
     """
     L_T = trust_weighted_laplacian(adjacency, trust)
     L_F = trust_weighted_laplacian(adjacency, np.ones_like(trust))
@@ -62,9 +67,46 @@ def fragmentation_index(
     # second-smallest (first is ~0)
     lam2_T = float(eig_T[1])
     lam2_F = float(eig_F[1])
-    if lam2_F < 1e-12:
-        return 0.0
+    # Connectivity guard: λ₂(L_F) ≈ 0 means the graph is disconnected.
+    if lam2_F < 1e-9:
+        return float("nan")
     return lam2_T / lam2_F
+
+
+def twsl_self_consistent_iteration(
+    adjacency: np.ndarray,
+    test_cochain: np.ndarray,
+    damping: float = 0.85,
+    iters: int = 30,
+    sigma: float = 1.0,
+    T0: float = 1e-3,
+) -> np.ndarray:
+    """The TRUE nonlinear TWSL self-consistent iteration (Theorem 1).
+
+    Updates BOTH the loyalty and the trust vector each step:
+      ℓ_k     = exp(-r(T_k)² / 2σ²)  where r(T) = (L_T x)_v per vertex
+      T_{k+1} = (1-d) ℓ_k + d ℓ_k ⊙ (M T_k)
+
+    The iteration is clamped to [T0, 1]^N to avoid the 1/√T_min Lipschitz blow-up
+    flagged by PhD review (35_THEOREMS_AND_PROOFS.md §1 caveat).
+
+    Returns the converged trust vector T*.
+    """
+    A = np.asarray(adjacency, dtype=np.float64)
+    x = np.asarray(test_cochain, dtype=np.float64)
+    n = A.shape[0]
+    out_deg = A.sum(axis=1)
+    out_deg = np.where(out_deg > 0, out_deg, 1.0)
+    M = (A / out_deg[:, None]).T  # column-stochastic
+    T = np.ones(n, dtype=np.float64)
+    for _ in range(iters):
+        L_T = trust_weighted_laplacian(A, T)
+        # per-vertex residual r_i = |(L_T x)_i|
+        residuals = np.abs(L_T @ x)
+        ell = np.exp(-(residuals**2) / (2 * sigma**2))
+        T = (1 - damping) * ell + damping * ell * (M @ T)
+        T = np.clip(T, T0, 1.0)
+    return T
 
 
 def twsl_iteration(
@@ -90,7 +132,7 @@ def twsl_iteration(
     out_deg = A.sum(axis=1)
     out_deg = np.where(out_deg > 0, out_deg, 1.0)
     M = (A / out_deg[:, None]).T  # column-stochastic
-    ell = np.exp(-(residuals ** 2) / (2 * sigma ** 2))
+    ell = np.exp(-(residuals**2) / (2 * sigma**2))
     T = np.ones(n, dtype=np.float64)
     for _ in range(iters):
         T = (1 - damping) * ell + damping * ell * (M @ T)

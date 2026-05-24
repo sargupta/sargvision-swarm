@@ -68,9 +68,7 @@ class SwarmState:
     def apply_velocities(self, velocities: np.ndarray, dt: float) -> None:
         """Integrate positions forward using given velocities, then store them."""
         if velocities.shape != (self.n, 3):
-            raise ValueError(
-                f"velocities shape {velocities.shape} != ({self.n}, 3)"
-            )
+            raise ValueError(f"velocities shape {velocities.shape} != ({self.n}, 3)")
         for i, drone in enumerate(self.drones):
             if drone.healthy:
                 drone.vel = velocities[i].copy()
@@ -94,8 +92,5 @@ class SwarmState:
             size=(n, 3),
         )
         velocities = rng.normal(scale=0.1, size=(n, 3))
-        drones = [
-            DroneState(id=i, pos=positions[i], vel=velocities[i])
-            for i in range(n)
-        ]
+        drones = [DroneState(id=i, pos=positions[i], vel=velocities[i]) for i in range(n)]
         return cls(drones=drones)

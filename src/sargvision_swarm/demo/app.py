@@ -19,7 +19,6 @@ from sargvision_swarm.viz import (
     topology_figure,
 )
 
-
 # ── Live-tab generator ────────────────────────────────────────────────
 
 
@@ -139,8 +138,12 @@ def _intents_table(result):
 def _bft_table(result):
     return [
         [
-            ev["t"], ev["proposal"], "PASS" if ev["passed"] else "FAIL",
-            ev.get("yes", 0), ev.get("no", 0), str(ev.get("byzantine", [])),
+            ev["t"],
+            ev["proposal"],
+            "PASS" if ev["passed"] else "FAIL",
+            ev.get("yes", 0),
+            ev.get("no", 0),
+            str(ev.get("byzantine", [])),
         ]
         for ev in result.bft_events
     ]
@@ -234,8 +237,12 @@ def build_app():
                             label="Scenario",
                         )
                         live_steps = gr.Slider(60, 400, value=180, step=10, label="Sim ticks")
-                        live_range = gr.Slider(5.0, 30.0, value=15.0, step=0.5, label="Comm range (m)")
-                        live_fps = gr.Slider(2.0, 30.0, value=10.0, step=1.0, label="Frame rate (fps)")
+                        live_range = gr.Slider(
+                            5.0, 30.0, value=15.0, step=0.5, label="Comm range (m)"
+                        )
+                        live_fps = gr.Slider(
+                            2.0, 30.0, value=10.0, step=1.0, label="Frame rate (fps)"
+                        )
                         live_seed = gr.Number(value=42, label="Seed", precision=0)
                         live_play = gr.Button("▶ Play live", variant="primary", size="lg")
                         live_status = gr.Markdown("Press Play.")
@@ -272,25 +279,47 @@ def build_app():
                             label="Scenario",
                         )
                         steps = gr.Slider(60, 500, value=200, step=10, label="Sim steps")
-                        comm_range = gr.Slider(5.0, 30.0, value=15.0, step=0.5, label="Comm range (m)")
+                        comm_range = gr.Slider(
+                            5.0, 30.0, value=15.0, step=0.5, label="Comm range (m)"
+                        )
                         seed = gr.Number(value=42, label="Seed", precision=0)
                         run_btn = gr.Button("Run rollout", variant="secondary")
                         rationale = gr.Markdown()
                     with gr.Column(scale=3):
                         with gr.Tabs():
                             with gr.Tab("Swarm + Topology"):
-                                step_slider = gr.Slider(0, 49, value=0, step=1, label="Replay frame")
+                                step_slider = gr.Slider(
+                                    0, 49, value=0, step=1, label="Replay frame"
+                                )
                                 with gr.Row():
                                     fig_3d = gr.Plot(label="3D positions")
                                     fig_topo = gr.Plot(label="Comm topology")
                             with gr.Tab("Wire log"):
                                 with gr.Row():
-                                    proto_filter = gr.Dropdown(choices=PROTOCOL_OPTIONS, value="ALL", label="Filter")
+                                    proto_filter = gr.Dropdown(
+                                        choices=PROTOCOL_OPTIONS, value="ALL", label="Filter"
+                                    )
                                     n_rows = gr.Slider(20, 500, value=150, step=10, label="Rows")
                                     refresh_btn = gr.Button("Refresh", size="sm")
                                 msg_table = gr.Dataframe(
-                                    headers=["t (s)", "proto", "src", "dst", "topic", "bytes", "payload"],
-                                    datatype=["number", "str", "number", "str", "str", "number", "str"],
+                                    headers=[
+                                        "t (s)",
+                                        "proto",
+                                        "src",
+                                        "dst",
+                                        "topic",
+                                        "bytes",
+                                        "payload",
+                                    ],
+                                    datatype=[
+                                        "number",
+                                        "str",
+                                        "number",
+                                        "str",
+                                        "str",
+                                        "number",
+                                        "str",
+                                    ],
                                     interactive=False,
                                     wrap=True,
                                     label="Messages",
@@ -301,11 +330,20 @@ def build_app():
                             with gr.Tab("Decisions"):
                                 gr.Markdown("### Per-drone intent")
                                 intent_table = gr.Dataframe(
-                                    headers=["drone", "intent"], datatype=["number", "str"], interactive=False
+                                    headers=["drone", "intent"],
+                                    datatype=["number", "str"],
+                                    interactive=False,
                                 )
                                 gr.Markdown("### SwarmRaft K=7 BFT votes")
                                 bft_table = gr.Dataframe(
-                                    headers=["t (s)", "proposal", "result", "yes", "no", "byzantine"],
+                                    headers=[
+                                        "t (s)",
+                                        "proposal",
+                                        "result",
+                                        "yes",
+                                        "no",
+                                        "byzantine",
+                                    ],
                                     datatype=["number", "str", "str", "number", "number", "str"],
                                     interactive=False,
                                 )
@@ -319,8 +357,12 @@ def build_app():
                 def _run(n, sc, st, cr, sd):
                     t0 = time.time()
                     result = rollout(
-                        n_drones=int(n), scenario=sc, steps=int(st), seed=int(sd),
-                        comm_range_m=float(cr), snapshot_every=4,
+                        n_drones=int(n),
+                        scenario=sc,
+                        steps=int(st),
+                        seed=int(sd),
+                        comm_range_m=float(cr),
+                        snapshot_every=4,
                     )
                     elapsed = time.time() - t0
                     n_frames = len(result.states)
@@ -331,7 +373,9 @@ def build_app():
                         _topo_figure(result, 0),
                         gr.Slider(minimum=0, maximum=max(0, n_frames - 1), value=0, step=1),
                         _message_table(result, max_rows=150, proto_filter="ALL"),
-                        bandwidth_figure(result.bandwidth.rates_by_protocol(now), title="Bytes / sec by protocol"),
+                        bandwidth_figure(
+                            result.bandwidth.rates_by_protocol(now), title="Bytes / sec by protocol"
+                        ),
                         protocol_breakdown_pie(result.message_log.by_protocol()),
                         _intents_table(result),
                         _bft_table(result),
@@ -350,17 +394,37 @@ def build_app():
                     now = result.states[-1].t
                     return (
                         _message_table(result, max_rows=int(rows), proto_filter=pf),
-                        bandwidth_figure(result.bandwidth.rates_by_protocol(now), title="Bytes / sec by protocol"),
+                        bandwidth_figure(
+                            result.bandwidth.rates_by_protocol(now), title="Bytes / sec by protocol"
+                        ),
                         protocol_breakdown_pie(result.message_log.by_protocol()),
                     )
 
                 run_btn.click(
                     _run,
                     inputs=[n_drones, scenario, steps, comm_range, seed],
-                    outputs=[state, fig_3d, fig_topo, step_slider, msg_table, fig_bw, fig_pie, intent_table, bft_table, cbba_table, rationale],
+                    outputs=[
+                        state,
+                        fig_3d,
+                        fig_topo,
+                        step_slider,
+                        msg_table,
+                        fig_bw,
+                        fig_pie,
+                        intent_table,
+                        bft_table,
+                        cbba_table,
+                        rationale,
+                    ],
                 )
-                step_slider.change(_scrub, inputs=[state, step_slider, scenario], outputs=[fig_3d, fig_topo])
-                refresh_btn.click(_refresh_log, inputs=[state, n_rows, proto_filter], outputs=[msg_table, fig_bw, fig_pie])
+                step_slider.change(
+                    _scrub, inputs=[state, step_slider, scenario], outputs=[fig_3d, fig_topo]
+                )
+                refresh_btn.click(
+                    _refresh_log,
+                    inputs=[state, n_rows, proto_filter],
+                    outputs=[msg_table, fig_bw, fig_pie],
+                )
 
             # ────────────────── 📖 Reference tabs ──────────────────────────
             with gr.Tab("📖 Protocols"):

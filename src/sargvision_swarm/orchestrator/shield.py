@@ -19,9 +19,11 @@ Decoys carry near-zero expected damage so interceptors don't waste shots.
 Hijacked teammates carry low trust so their (likely adversarial) bids
 are ignored.
 """
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Any
+
 import numpy as np
 
 
@@ -125,10 +127,12 @@ def shield_priorities(
     E and adds Voronoi-hysteresis ownership + tropical-attention
     resolution under jamming-aware concurrency.
     """
-    from sargvision_swarm.core.sheaf import (
-        loyalty_from_positions, SheafState, SheafParams,
-    )
     from sargvision_swarm.comms.trust import pagerank_trust
+    from sargvision_swarm.core.sheaf import (
+        SheafParams,
+        SheafState,
+        loyalty_from_positions,
+    )
 
     p = params or ShieldParams()
     n = friendly_positions.shape[0]
@@ -138,7 +142,9 @@ def shield_priorities(
     # ── 1. Loyalty via sheaf-Laplacian residual
     sheaf_state = SheafState(loyalty=state.loyalty)
     loyalty = loyalty_from_positions(
-        friendly_positions, adjacency, sheaf_state,
+        friendly_positions,
+        adjacency,
+        sheaf_state,
         SheafParams(sigma_n=p.sigma_n, smoothing=p.smoothing),
         spoofed_ids=spoofed_ids,
     )
@@ -146,8 +152,10 @@ def shield_priorities(
 
     # ── 2. Trust via damped PageRank
     state.trust = pagerank_trust(
-        adjacency, loyalty,
-        damping=p.pagerank_damping, iters=p.pagerank_iters,
+        adjacency,
+        loyalty,
+        damping=p.pagerank_damping,
+        iters=p.pagerank_iters,
     )
 
     # ── 3. Update posteriors for every alive hostile
@@ -175,7 +183,7 @@ def shield_priorities(
             if state.trust[i] < p.trust_kill_threshold:
                 continue
             d = float(np.linalg.norm(friendly_positions[i] - h.pos))
-            E[i, j] = state.trust[i] * e_dmg / (d ** p.distance_falloff + 1e-6)
+            E[i, j] = state.trust[i] * e_dmg / (d**p.distance_falloff + 1e-6)
     return E, list(range(n)), hostile_ids
 
 
@@ -195,8 +203,13 @@ def shield_assign(
     want VAJRA's Voronoi + tropical attention layer.
     """
     E, friendly_ids, hostile_ids = shield_priorities(
-        friendly_positions, friendly_roles, hostiles, adjacency,
-        state, params, spoofed_ids,
+        friendly_positions,
+        friendly_roles,
+        hostiles,
+        adjacency,
+        state,
+        params,
+        spoofed_ids,
     )
     already_assigned = already_assigned or {}
 

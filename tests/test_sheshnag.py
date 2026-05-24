@@ -6,9 +6,9 @@ import numpy as np
 
 from sargvision_swarm.orchestrator.sheshnag import (
     CorrelatedSeeds,
-    SIRParams,
     SheshnagParams,
     SheshnagState,
+    SIRParams,
     basic_reproduction_number,
     kuramoto_step,
     select_broadcast_targets,
@@ -17,7 +17,6 @@ from sargvision_swarm.orchestrator.sheshnag import (
     swarm_phase_metrics,
     tempo_gap,
 )
-
 
 # ── 1. Phase metrics ──────────────────────────────────────────────────
 
@@ -70,8 +69,9 @@ def test_beacon_kick_raises_panic():
     """Beacon is area-effect EW — its kick should drop monotonically with distance,
     not be a delta function."""
     n = 5
-    pos = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 0.0, 0.0],
-                    [30.0, 0.0, 0.0], [40.0, 0.0, 0.0]])
+    pos = np.array(
+        [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [20.0, 0.0, 0.0], [30.0, 0.0, 0.0], [40.0, 0.0, 0.0]]
+    )
     panic = np.zeros(n)
     params = SIRParams(beta=0.0, gamma=0.0, beacon_kick=0.6, neighbour_radius=4.0)
     beacons = np.array([[20.0, 0.0, 0.0]])  # broadcast right at drone 2
@@ -166,12 +166,14 @@ def test_sheshnag_tick_only_broadcasts_when_authorized():
 
 
 def test_select_broadcast_targets_returns_unpanicked_dense_seeds():
-    pos = np.array([
-        [0.0, 0.0, 0.0],   # dense cluster
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [50.0, 0.0, 0.0],  # isolated
-    ])
+    pos = np.array(
+        [
+            [0.0, 0.0, 0.0],  # dense cluster
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [50.0, 0.0, 0.0],  # isolated
+        ]
+    )
     panic = np.array([0.0, 0.0, 0.0, 0.0])
     targets = select_broadcast_targets(pos, panic, n_targets=1)
     # Best target is in the dense cluster, not the isolated drone.

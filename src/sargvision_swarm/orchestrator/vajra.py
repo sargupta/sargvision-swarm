@@ -14,6 +14,7 @@ Composes four primitives that sit ON TOP of SHIELD's per-pair priority E_ij:
 VAJRA decomposes a single counter-swarm problem into per-component sub-
 problems when the comm graph fragments — graceful degradation, not collapse.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -22,7 +23,6 @@ from math import sqrt
 import numpy as np
 
 from sargvision_swarm.core.tropical import tropical_attention_assignment
-
 
 # ── 1. Lanchester break-even ─────────────────────────────────────────
 
@@ -145,10 +145,10 @@ def connected_components(adjacency: np.ndarray) -> list[set[int]]:
 @dataclass
 class VajraParams:
     voronoi_margin: float = 1.5
-    voronoi_bonus: float = 1.4    # multiplicative bonus for the cell owner
+    voronoi_bonus: float = 1.4  # multiplicative bonus for the cell owner
     tropical_beta: float = 8.0
     tropical_iters: int = 6
-    jamming_factor: float = 0.0   # 0 = clear, 1 = fully jammed
+    jamming_factor: float = 0.0  # 0 = clear, 1 = fully jammed
     fragmentation_threshold: float = 1e-3  # λ₂ below this → fragmented mode
 
 
@@ -204,13 +204,17 @@ def vajra_assign(
     incumbent_assignments: dict[int, int] = {}
     for j, h_id in enumerate(hostile_ids):
         owner_idx = state.voronoi.cell_owner(
-            friendly_positions, h_id, hostile_positions[j], margin=p.voronoi_margin,
+            friendly_positions,
+            h_id,
+            hostile_positions[j],
+            margin=p.voronoi_margin,
         )
         if 0 <= owner_idx < n:
             C[owner_idx, j] *= p.voronoi_bonus
         # Record handover for telemetry if it changed.
         prev_assigned = next(
-            (fid for fid, hid in already_assigned.items() if hid == h_id), None,
+            (fid for fid, hid in already_assigned.items() if hid == h_id),
+            None,
         )
         if (
             prev_assigned is not None
@@ -218,7 +222,9 @@ def vajra_assign(
             and owner_idx >= 0
             and owner_idx < n
         ):
-            state.handover_events.append({"hostile_id": h_id, "from": prev_assigned, "to": owner_idx})
+            state.handover_events.append(
+                {"hostile_id": h_id, "from": prev_assigned, "to": owner_idx}
+            )
         if prev_assigned is not None:
             incumbent_assignments[prev_assigned] = h_id
 
@@ -232,7 +238,11 @@ def vajra_assign(
         C[:, j] = 0.0
 
     # ── 4.2 Per-component assignment ──
-    components = connected_components(adjacency) if state.lambda2 < p.fragmentation_threshold else [set(range(n))]
+    components = (
+        connected_components(adjacency)
+        if state.lambda2 < p.fragmentation_threshold
+        else [set(range(n))]
+    )
 
     # ── 4.3 Tropical attention per component ──
     assignment: dict[int, int] = {}
@@ -247,7 +257,9 @@ def vajra_assign(
             cap_scale = max(0.0, 1.0 - p.jamming_factor)
             sub_C = sub_C * cap_scale
         sub_assign = tropical_attention_assignment(
-            sub_C, beta=p.tropical_beta, iters=p.tropical_iters,
+            sub_C,
+            beta=p.tropical_beta,
+            iters=p.tropical_iters,
         )
         for local_i, j in sub_assign.items():
             global_i = comp_idx[local_i]

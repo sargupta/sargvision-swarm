@@ -6,8 +6,8 @@ from sargvision_swarm.agents.peer_dialogue import PeerDialogue, agent_card
 from sargvision_swarm.comms import (
     A2ACard,
     A2AMessage,
-    BFTVote,
     BandwidthTracker,
+    BFTVote,
     CBBABid,
     CommModel,
     IntentPayload,
@@ -118,8 +118,8 @@ def test_peer_dialogue_emits_messages():
     msgs = peer.emit_round(t=0.0, intents={d.id: "hold_formation" for d in swarm.drones})
     assert len(msgs) > 0
     protocols = {m.protocol.value for m in msgs}
-    assert "Zenoh" in protocols   # pose broadcasts
-    assert "A2A" in protocols     # intent shares
+    assert "Zenoh" in protocols  # pose broadcasts
+    assert "A2A" in protocols  # intent shares
     assert "MAVLink" in protocols  # heartbeats
 
 

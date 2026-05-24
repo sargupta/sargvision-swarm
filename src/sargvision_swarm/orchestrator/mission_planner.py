@@ -18,7 +18,7 @@ class MissionGoal(BaseModel):
 
     goal_text: str
     n_drones: int
-    scenario: str = "flock"   # flock | formation_v | coverage | hover | sead_ingress
+    scenario: str = "flock"  # flock | formation_v | coverage | hover | sead_ingress
 
 
 class TaskBundle(BaseModel):
@@ -32,7 +32,7 @@ class MissionPlan(BaseModel):
     """Output of planner — fed downstream into reflex + agents."""
 
     scenario: str
-    algorithm: str   # boids | olfati_saber
+    algorithm: str  # boids | olfati_saber
     goal_pos: list[float]
     bundles: list[TaskBundle]
     rationale: str = ""
@@ -86,8 +86,7 @@ class MissionPlanner:
                 algorithm="boids",
                 goal_pos=[15.0, 0.0, 6.0],
                 bundles=[
-                    TaskBundle(drone_id=i, role=Role.WORKER.value)
-                    for i in range(goal.n_drones)
+                    TaskBundle(drone_id=i, role=Role.WORKER.value) for i in range(goal.n_drones)
                 ],
                 rationale="Boids reflex + BVC. No explicit goal; emergent flock cohesion.",
             )
@@ -107,14 +106,24 @@ class MissionPlanner:
                 bundles=self._coverage_bundles(goal.n_drones),
                 rationale="Distributed coverage — drones disperse to assigned cells.",
             )
+        if scenario == "border_strike":
+            # Operation Trishul — multi-axis HVT defence. Reuses the same
+            # coverage reflex (per-slot pull + intercept overrides) but with
+            # cells positioned in a defensive ring between LoC and HVTs.
+            return MissionPlan(
+                scenario=scenario,
+                algorithm="olfati_saber",
+                goal_pos=[0.0, -2.0, 6.0],
+                bundles=self._coverage_bundles(goal.n_drones, ring_radius=5.5, centre=(0.0, -2.0)),
+                rationale="Operation Trishul — defensive ring vs cross-border drone strike on Leh AB + Karu power + DBO.",
+            )
         if scenario == "sead_ingress":
             return MissionPlan(
                 scenario=scenario,
                 algorithm="chanakya_geodesic",
                 goal_pos=[0.0, 32.0, 6.0],
                 bundles=[
-                    TaskBundle(drone_id=i, role=Role.WORKER.value)
-                    for i in range(goal.n_drones)
+                    TaskBundle(drone_id=i, role=Role.WORKER.value) for i in range(goal.n_drones)
                 ],
                 rationale="CHANAKYA Riemannian geodesic ingress across hostile IADS.",
             )
@@ -124,8 +133,7 @@ class MissionPlanner:
                 algorithm="governed_migration",
                 goal_pos=[0.0, 25.0, 6.0],
                 bundles=[
-                    TaskBundle(drone_id=i, role=Role.WORKER.value)
-                    for i in range(goal.n_drones)
+                    TaskBundle(drone_id=i, role=Role.WORKER.value) for i in range(goal.n_drones)
                 ],
                 rationale=(
                     "GOVERNED MIGRATION Leh → forward LAC. 100 drones load-balance "
@@ -162,15 +170,20 @@ class MissionPlanner:
         return bundles
 
     @staticmethod
-    def _coverage_bundles(n: int) -> list[TaskBundle]:
+    def _coverage_bundles(
+        n: int,
+        ring_radius: float | None = None,
+        centre: tuple[float, float] = (0.0, 0.0),
+    ) -> list[TaskBundle]:
         import math
 
         bundles: list[TaskBundle] = []
-        radius = max(5.0, n * 0.3)
+        radius = ring_radius if ring_radius is not None else max(5.0, n * 0.3)
+        cx, cy = centre
         for i in range(n):
             theta = 2 * math.pi * i / n
-            x = radius * math.cos(theta)
-            y = radius * math.sin(theta)
+            x = cx + radius * math.cos(theta)
+            y = cy + radius * math.sin(theta)
             bundles.append(
                 TaskBundle(
                     drone_id=i,

@@ -21,12 +21,12 @@ cost, plus tacit-coordination gain.
 Engagement gate: SHESHNAG is a STRATEGIC weapon — sim integration must
 require a BFT vote authorisation (K=7 SwarmRaft) before broadcasts fire.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 import numpy as np
-
 
 # ── 1. Couzin-Krause swarm-phase detector ────────────────────────────
 
@@ -69,8 +69,8 @@ def swarm_phase_metrics(velocities: np.ndarray, positions: np.ndarray) -> dict:
 
 @dataclass
 class SIRParams:
-    beta: float = 0.55     # contact rate (per neighbour per second)
-    gamma: float = 0.05    # recovery rate (per second)
+    beta: float = 0.55  # contact rate (per neighbour per second)
+    gamma: float = 0.05  # recovery rate (per second)
     beacon_kick: float = 0.40  # per-broadcast injection ceiling
     neighbour_radius: float = 12.0
 
@@ -104,7 +104,7 @@ def sir_step(
     if beacon_targets is not None and beacon_targets.size > 0:
         for tgt in beacon_targets:
             d = np.linalg.norm(hostile_positions - tgt, axis=1)
-            eta = eta + p.beacon_kick * np.exp(-(d ** 2) / (2 * 8.0 ** 2))
+            eta = eta + p.beacon_kick * np.exp(-(d**2) / (2 * 8.0**2))
     dI = (p.beta * contact * (1.0 - panic) - p.gamma * panic + eta) * dt
     panic_next = np.clip(panic + dI, 0.0, 1.0)
     return panic_next
@@ -192,7 +192,7 @@ def kuramoto_step(
     n = phases.shape[0]
     if n == 0:
         return phases
-    diff = phases[None, :] - phases[:, None]   # (n, n) of φ_j - φ_i
+    diff = phases[None, :] - phases[:, None]  # (n, n) of φ_j - φ_i
     interaction = (adjacency * np.sin(diff)).sum(axis=1)
     return (phases + dt * (natural_freq + coupling * interaction)) % (2 * np.pi)
 
@@ -219,15 +219,15 @@ class SheshnagParams:
     sir: SIRParams = field(default_factory=SIRParams)
     panic_milling_threshold: float = 0.45
     broadcasts_per_tick: int = 3
-    ew_emission_cost: float = 0.02   # per-broadcast cost in composite objective
+    ew_emission_cost: float = 0.02  # per-broadcast cost in composite objective
     coupling: float = 0.6
-    friendly_period_target: float = 0.40   # τ_F, seconds
-    hostile_period_assumed: float = 0.95   # τ_H, conservative estimate
+    friendly_period_target: float = 0.40  # τ_F, seconds
+    hostile_period_assumed: float = 0.95  # τ_H, conservative estimate
 
 
 @dataclass
 class SheshnagState:
-    authorized: bool = False           # BFT-gated psyops emission permission
+    authorized: bool = False  # BFT-gated psyops emission permission
     broadcast_targets: list[np.ndarray] = field(default_factory=list)
     broadcasts_emitted: int = 0
     last_phase: dict = field(default_factory=lambda: {"P": 0.0, "R": 0.0, "phase": "SWARM"})
@@ -279,7 +279,9 @@ def sheshnag_tick(
         return panic
     if state.authorized:
         state.broadcast_targets = select_broadcast_targets(
-            hostile_positions, panic, p.broadcasts_per_tick,
+            hostile_positions,
+            panic,
+            p.broadcasts_per_tick,
         )
         state.broadcasts_emitted += len(state.broadcast_targets)
         beacons = np.array(state.broadcast_targets) if state.broadcast_targets else None
@@ -297,8 +299,6 @@ def sheshnag_tick(
     )
     p_milling = 1.0 if state.last_phase["phase"] == "MILLING" else state.fraction_panicked
     state.composite_value = (
-        p_milling
-        + 0.3 * delta_tau
-        - p.ew_emission_cost * len(state.broadcast_targets)
+        p_milling + 0.3 * delta_tau - p.ew_emission_cost * len(state.broadcast_targets)
     )
     return panic_next

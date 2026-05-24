@@ -25,12 +25,12 @@ Solvers (no PyTorch dep — pure NumPy):
 Updates LiveSession's per-tick params (SHIELD trust threshold, VAJRA
 voronoi bonus, jamming-aware concurrency cap) from the posture mix.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
 import numpy as np
-
 
 POSTURE_ACTIONS = ("defend", "intercept", "recon", "decoy_emitter", "retreat")
 HOSTILE_CLASSES = ("decoy", "kinetic", "nuisance")
@@ -41,11 +41,11 @@ HOSTILE_CLASSES = ("decoy", "kinetic", "nuisance")
 DEFAULT_PAYOFF = np.array(
     [
         # decoy   kinetic  nuisance
-        [-0.20,  -0.60,   0.10],   # defend   — wastes shots on decoys but tanks kinetics
-        [-0.40,   1.00,   0.20],   # intercept— shines vs kinetics, exposed to decoys
-        [ 0.30,  -0.10,   0.40],   # recon    — gathers intel cheaply
-        [ 0.60,  -0.30,   0.10],   # decoy_emitter — confuses real strikers
-        [-0.05,  -0.80,  -0.05],   # retreat  — only good when overwhelmed
+        [-0.20, -0.60, 0.10],  # defend   — wastes shots on decoys but tanks kinetics
+        [-0.40, 1.00, 0.20],  # intercept— shines vs kinetics, exposed to decoys
+        [0.30, -0.10, 0.40],  # recon    — gathers intel cheaply
+        [0.60, -0.30, 0.10],  # decoy_emitter — confuses real strikers
+        [-0.05, -0.80, -0.05],  # retreat  — only good when overwhelmed
     ],
     dtype=np.float64,
 )
@@ -70,8 +70,8 @@ def nash_replicator(
     mu_h = np.ones(n_h) / n_h
     for _ in range(iters):
         # Expected payoff per action vs current opponent mix
-        f_fitness = payoff @ mu_h            # friendly value per action
-        h_fitness = -payoff.T @ mu_f          # hostile value per action (opposite sign)
+        f_fitness = payoff @ mu_h  # friendly value per action
+        h_fitness = -payoff.T @ mu_f  # hostile value per action (opposite sign)
         # Replicator step (multiplicative weights)
         mu_f = mu_f * np.exp(lr * (f_fitness - f_fitness.dot(mu_f)))
         mu_h = mu_h * np.exp(lr * (h_fitness - h_fitness.dot(mu_h)))
@@ -227,7 +227,10 @@ def solve_maya(
     mu_F_nash, _mu_H_nash = nash_replicator(p.payoff)
     # 2. Worst-case adversary in W-ball around the empirical estimate
     mu_H_worst, _ = wasserstein_dro_inner(
-        mu_F_nash, p.payoff, hostile_posterior_est, epsilon=p.wasserstein_epsilon,
+        mu_F_nash,
+        p.payoff,
+        hostile_posterior_est,
+        epsilon=p.wasserstein_epsilon,
     )
     # 3. Best-response posture vs the worst case
     # Solve a single-population fitness: μ_F maximises payoff @ mu_H_worst

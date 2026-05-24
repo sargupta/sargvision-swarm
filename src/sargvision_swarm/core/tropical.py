@@ -20,6 +20,7 @@ Two solvers are exposed:
 The tropical solver returns the same kind of `{friendly_id: hostile_id}` map
 SHIELD's greedy auction does, so it's a drop-in replacement.
 """
+
 from __future__ import annotations
 
 import numpy as np

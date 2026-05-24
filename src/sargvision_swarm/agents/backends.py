@@ -48,9 +48,7 @@ class AnthropicBackend:
         try:
             import anthropic  # noqa: F401
         except ImportError as e:
-            raise RuntimeError(
-                "anthropic SDK not installed. `pip install '.[llm]'`"
-            ) from e
+            raise RuntimeError("anthropic SDK not installed. `pip install '.[llm]'`") from e
         from anthropic import Anthropic
 
         self.client = Anthropic()

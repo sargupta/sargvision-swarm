@@ -4,6 +4,7 @@ Mirrors `HostileFleet`'s role but for stationary (or slowly-relocating)
 defense assets. CHANAKYA's planner reads the active subset of this field
 to build the Riemannian threat manifold.
 """
+
 from __future__ import annotations
 
 import math
@@ -22,6 +23,7 @@ class DefenseField:
     `seed` controls reproducible spawning. `dirty` flips True when an asset
     is added / removed / toggled so CHANAKYA knows to replan.
     """
+
     seed: int = 13
     assets: list[DefenseAsset] = field(default_factory=list)
     dirty: bool = True
@@ -42,21 +44,29 @@ class DefenseField:
         self.assets = []
         for i in range(n_radars):
             theta = (i / n_radars) * 2 * math.pi + self._rng.uniform(-0.05, 0.05)
-            pos = centre + np.array([
-                ring_radius * math.cos(theta),
-                ring_radius * math.sin(theta),
-                4.0,
-            ])
-            self.assets.append(DefenseAsset(
-                pos=pos.astype(float),
-                engagement_radius=engagement_radius,
-                active=True,
-                name=f"S400-{i+1:02d}",
-            ))
+            pos = centre + np.array(
+                [
+                    ring_radius * math.cos(theta),
+                    ring_radius * math.sin(theta),
+                    4.0,
+                ]
+            )
+            self.assets.append(
+                DefenseAsset(
+                    pos=pos.astype(float),
+                    engagement_radius=engagement_radius,
+                    active=True,
+                    name=f"S400-{i + 1:02d}",
+                )
+            )
         self.dirty = True
 
-    def add_pop_up(self, pos: np.ndarray, engagement_radius: float = 4.0, name: str = "POPUP") -> None:
-        self.assets.append(DefenseAsset(pos=pos.astype(float), engagement_radius=engagement_radius, name=name))
+    def add_pop_up(
+        self, pos: np.ndarray, engagement_radius: float = 4.0, name: str = "POPUP"
+    ) -> None:
+        self.assets.append(
+            DefenseAsset(pos=pos.astype(float), engagement_radius=engagement_radius, name=name)
+        )
         self.dirty = True
 
     def toggle(self, idx: int, active: bool | None = None) -> None:

@@ -16,6 +16,7 @@ The functions here let you (i) numerically compute CCG for a finite game via bru
 force over the policy space, (ii) verify the Theorem 5 upper bound, (iii) check
 Theorem 7's adversarial-CCG positivity under encrypted seeds.
 """
+
 from __future__ import annotations
 
 from itertools import product
@@ -52,12 +53,31 @@ def mean_pairwise_mi(nu: np.ndarray) -> float:
         for j in range(i + 1, N):
             axes = tuple(ax for ax in range(N) if ax not in (i, j))
             joint_ij = nu.sum(axis=axes) if axes else nu
-            # ensure 2D (i first, j second)
-            if i > j:
-                joint_ij = joint_ij.T
             total += mutual_information(joint_ij)
             count += 1
     return total / max(count, 1)
+
+
+def total_correlation(nu: np.ndarray) -> float:
+    """T(ν) = Σ_i H(X_i) − H(X_1, ..., X_N).
+
+    For N=2, T(ν) = I(X_1; X_2). For N≥3, T captures higher-order interactions
+    that mean pairwise MI misses — see 35_THEOREMS_AND_PROOFS.md Theorem 5
+    counterexample (3-bit parity gives T = log 2, I̅ = 0).
+
+    Used by Theorem 5 (rev. 2): G(Γ, ν) ≤ U · sqrt(T(ν) / 2).
+    """
+    if nu.ndim < 1:
+        return 0.0
+    N = nu.ndim
+    sum_marginals = 0.0
+    for i in range(N):
+        # marginal over X_i
+        axes = tuple(ax for ax in range(N) if ax != i)
+        marg = nu.sum(axis=axes) if axes else nu
+        sum_marginals += shannon_entropy(marg)
+    joint_ent = shannon_entropy(nu.ravel())
+    return float(sum_marginals - joint_ent)
 
 
 def best_product_payoff(
@@ -139,9 +159,105 @@ def ccg_upper_bound(
     payoff: np.ndarray,
     nu: np.ndarray,
 ) -> float:
-    """Theorem 5: G ≤ U · sqrt(I̅(ν) / 2)."""
+    """**Theorem 5 (rev. 2):** G ≤ U · sqrt(T(ν) / 2) using total correlation.
+
+    For N=2 this equals U · sqrt(I(X_1; X_2) / 2). For N≥3 the pairwise-MI form
+    is FALSE in general (see 3-bit parity counterexample in
+    35_THEOREMS_AND_PROOFS.md); use T(ν) — which is what this function returns.
+    """
+    U = float(payoff.max() - payoff.min())
+    return U * np.sqrt(max(total_correlation(nu), 0.0) / 2.0)
+
+
+def ccg_upper_bound_pairwise(payoff: np.ndarray, nu: np.ndarray) -> float:
+    """Deprecated v1 bound: G ≤ U · sqrt(I̅(ν) / 2).
+
+    **Warning.** This bound is FALSE for N ≥ 3 in general (3-bit parity has
+    I̅ = 0 but T > 0). Use `ccg_upper_bound` (which uses T(ν)) instead. This
+    function is retained only for v1-compatibility testing and to document
+    the counterexample.
+    """
     U = float(payoff.max() - payoff.min())
     return U * np.sqrt(max(mean_pairwise_mi(nu), 0.0) / 2.0)
+
+
+# ── Bayesian common-payoff helpers (rev. 2 — Theorem 5/6 setting) ──
+
+
+def best_product_payoff_bayesian(
+    payoff_tensor: np.ndarray,
+    prior_theta: np.ndarray,
+    action_sizes: tuple[int, ...],
+) -> float:
+    """Bayesian common-payoff best product: max over (π_1, ..., π_N) ∈ ∏ Δ(A_i)
+    of E_θ E_{a~π}[u(θ, a)].
+
+    `payoff_tensor` shape: (|Θ|, |A_1|, ..., |A_N|). For common-payoff games
+    with finite actions, the max is attained at a pure profile (LP fundamental
+    theorem applied to u linear in each player's marginal). Brute-force.
+    """
+    from itertools import product as iter_product
+
+    n_states = prior_theta.shape[0]
+    best = -np.inf
+    for profile in iter_product(*[range(k) for k in action_sizes]):
+        v = 0.0
+        for t in range(n_states):
+            v += float(prior_theta[t]) * float(payoff_tensor[(t,) + profile])
+        if v > best:
+            best = v
+    return best
+
+
+def best_signal_payoff_bayesian(
+    payoff_tensor: np.ndarray,
+    nu: np.ndarray,
+    action_sizes: tuple[int, ...],
+) -> float:
+    """Bayesian common-payoff best signal-conditioned: max over σ_i: Ξ_i → A_i of
+    E_{(θ,ξ)~ν} E_{a~σ(·|ξ)}[u(θ, a)].
+
+    `nu` shape: (|Θ|, |Ξ_1|, ..., |Ξ_N|). Joint over hidden state and per-player signals.
+    For common-payoff games on finite alphabets, deterministic σ suffice. Brute-force.
+    """
+    from itertools import product as iter_product
+
+    N = len(action_sizes)
+    assert payoff_tensor.ndim == 1 + N, "payoff_tensor must have shape (|Θ|, |A_1|, ..., |A_N|)"
+    assert nu.ndim == 1 + N, "nu must have shape (|Θ|, |Ξ_1|, ..., |Ξ_N|)"
+    n_states = nu.shape[0]
+    sig_dims = nu.shape[1:]
+    # Enumerate all deterministic σ_i: Ξ_i → A_i
+    policy_spaces = [
+        list(iter_product(range(k), repeat=sig_dims[i])) for i, k in enumerate(action_sizes)
+    ]
+    best = -np.inf
+    for sigma in iter_product(*policy_spaces):
+        total = 0.0
+        for t in range(n_states):
+            for xi in iter_product(*[range(d) for d in sig_dims]):
+                a = tuple(sigma[i][xi[i]] for i in range(N))
+                total += float(nu[(t,) + xi]) * float(payoff_tensor[(t,) + a])
+        if total > best:
+            best = total
+    return best
+
+
+def classical_correlation_gain_bayesian(
+    payoff_tensor: np.ndarray,
+    prior_theta: np.ndarray,
+    nu: np.ndarray,
+    action_sizes: tuple[int, ...],
+) -> float:
+    """**Definition 2 (rev. 2)**: Bayesian common-payoff CCG.
+
+    G = sup_σ E_{(θ,ξ)~ν, a~σ(·|ξ)}[u(θ,a)] − sup_π E_{θ~p_0, a~π}[u(θ,a)]
+
+    For state-independent payoff, this reduces to 0 (v1 setting).
+    """
+    sigma_val = best_signal_payoff_bayesian(payoff_tensor, nu, action_sizes)
+    pi_val = best_product_payoff_bayesian(payoff_tensor, prior_theta, action_sizes)
+    return sigma_val - pi_val
 
 
 def adversarial_ccg(

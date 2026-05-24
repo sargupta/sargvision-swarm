@@ -15,6 +15,7 @@ scipy.sparse.csgraph.
 Output is a sequence of (x, y, z) waypoints the swarm can follow, with the
 discrete shortest-path cost serving as the discretised action functional.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -41,6 +42,7 @@ def conformal_factor(threat: np.ndarray, params: MetricParams | None = None) -> 
 @dataclass
 class Grid2D:
     """Uniform 2D grid: x ∈ [x_min, x_max], y ∈ [y_min, y_max], altitude=z_fixed."""
+
     x_min: float
     x_max: float
     y_min: float
@@ -99,8 +101,10 @@ def build_grid_graph(
     data = []
     # 8-connected neighbourhood
     nbr_offsets = [
-        (-1, 0, grid.dx), (1, 0, grid.dx),
-        (0, -1, grid.dy), (0, 1, grid.dy),
+        (-1, 0, grid.dx),
+        (1, 0, grid.dx),
+        (0, -1, grid.dy),
+        (0, 1, grid.dy),
         (-1, -1, np.hypot(grid.dx, grid.dy)),
         (-1, 1, np.hypot(grid.dx, grid.dy)),
         (1, -1, np.hypot(grid.dx, grid.dy)),
@@ -140,7 +144,10 @@ def geodesic_path(
     s_idx = grid.world_to_index(start)
     t_idx = grid.world_to_index(target)
     distances, predecessors = dijkstra(
-        graph, indices=s_idx, return_predecessors=True, directed=False,
+        graph,
+        indices=s_idx,
+        return_predecessors=True,
+        directed=False,
     )
     if not np.isfinite(distances[t_idx]):
         return np.stack([start, target]), float(np.linalg.norm(target - start))

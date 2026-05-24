@@ -34,7 +34,9 @@ class SwarmRaft:
         step = max(1, n_drones // k)
         return ids[::step][:k]
 
-    def propose(self, proposal: str, byzantine_ids: set[int] | None = None) -> tuple[bool, list[BFTVote]]:
+    def propose(
+        self, proposal: str, byzantine_ids: set[int] | None = None
+    ) -> tuple[bool, list[BFTVote]]:
         """Run a vote round on `proposal`.
 
         Byzantine drones flip their vote randomly. Returns (passed?, vote-list).

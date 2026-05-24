@@ -34,14 +34,14 @@ def bvc_safe_velocity(
     if n <= 1:
         return desired_velocities.copy()
 
-    predicted = positions + desired_velocities * dt              # (N, 3)
+    predicted = positions + desired_velocities * dt  # (N, 3)
     safe_positions = predicted.copy()
 
     # Pairwise offsets to current positions
-    offsets = positions[None, :, :] - positions[:, None, :]      # (N, N, 3)
-    distances = np.linalg.norm(offsets, axis=-1)                 # (N, N)
+    offsets = positions[None, :, :] - positions[:, None, :]  # (N, N, 3)
+    distances = np.linalg.norm(offsets, axis=-1)  # (N, N)
     self_mask = np.eye(n, dtype=bool)
-    near_mask = (distances < influence_radius) & ~self_mask      # (N, N)
+    near_mask = (distances < influence_radius) & ~self_mask  # (N, N)
 
     # For each drone i, iterate over near neighbors j and check the half-plane:
     # plane normal n_ij = (pos_j - pos_i) / ||...||

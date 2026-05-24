@@ -5,8 +5,11 @@ Loyal drones produce sensor reports whose pairwise disagreements stay
 bounded by sensor noise; spoofed or hijacked drones blow up the Dirichlet
 residual on the sheaf Laplacian.
 """
+
 from __future__ import annotations
+
 from dataclasses import dataclass, field
+
 import numpy as np
 
 
@@ -50,7 +53,7 @@ def loyalty_from_positions(
     # restriction maps in a real cellular sheaf transform local frames into
     # the global frame; here we model that translation as already applied.
     rng = np.random.default_rng()
-    truth = np.tile(positions.mean(axis=0), (n, 1))    # (N, 3) — same centroid
+    truth = np.tile(positions.mean(axis=0), (n, 1))  # (N, 3) — same centroid
     noise = rng.normal(scale=p.sigma_n * 0.3, size=truth.shape)
     reports = truth + noise
     if spoofed_ids:
@@ -71,11 +74,11 @@ def loyalty_from_positions(
         if len(nbrs) == 0:
             residual[i] = 0.0
             continue
-        diffs = reports[i] - reports[nbrs]            # (k, 3)
-        edge_mag = np.linalg.norm(diffs, axis=1)       # (k,)
+        diffs = reports[i] - reports[nbrs]  # (k, 3)
+        edge_mag = np.linalg.norm(diffs, axis=1)  # (k,)
         residual[i] = float(np.median(edge_mag))
 
     # ── Loyalty = Gaussian on residual, EMA-smoothed across ticks
-    raw_loyalty = np.exp(-(residual ** 2) / (2.0 * p.sigma_n ** 2))
+    raw_loyalty = np.exp(-(residual**2) / (2.0 * p.sigma_n**2))
     state.loyalty = p.smoothing * state.loyalty + (1 - p.smoothing) * raw_loyalty
     return state.loyalty.copy()

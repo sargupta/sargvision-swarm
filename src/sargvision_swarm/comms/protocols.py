@@ -28,23 +28,23 @@ from pydantic import BaseModel, Field
 
 
 class Protocol(str, Enum):
-    A2A = "A2A"                # agent-to-agent JSON-RPC 2.0 over HTTP+SSE
-    MCP = "MCP"                # model context protocol (agent-to-tool)
-    MAVLINK = "MAVLink"        # autopilot bus, signed v2
-    ZENOH = "Zenoh"            # ROS 2 alt middleware, gossip discovery
-    DDS = "DDS"                # ROS 2 default middleware (Fast/Cyclone)
-    GRPC = "gRPC"              # LLM-to-LLM streaming
-    BFT = "BFT"                # SwarmRaft Byzantine fault tolerance
+    A2A = "A2A"  # agent-to-agent JSON-RPC 2.0 over HTTP+SSE
+    MCP = "MCP"  # model context protocol (agent-to-tool)
+    MAVLINK = "MAVLink"  # autopilot bus, signed v2
+    ZENOH = "Zenoh"  # ROS 2 alt middleware, gossip discovery
+    DDS = "DDS"  # ROS 2 default middleware (Fast/Cyclone)
+    GRPC = "gRPC"  # LLM-to-LLM streaming
+    BFT = "BFT"  # SwarmRaft Byzantine fault tolerance
 
 
 # ── Typed payloads ─────────────────────────────────────────────────────
 
 
 class PosePayload(BaseModel):
-    pos: list[float]   # 3
-    vel: list[float]   # 3
+    pos: list[float]  # 3
+    vel: list[float]  # 3
     yaw: float = 0.0
-    bytes_size: int = 32   # MAVLink-ish position telem
+    bytes_size: int = 32  # MAVLink-ish position telem
 
 
 class HeartbeatPayload(BaseModel):
@@ -68,7 +68,7 @@ class A2AMessage(BaseModel):
 
     jsonrpc: Literal["2.0"] = "2.0"
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    method: str            # e.g. "negotiate.yield", "claim.task", "share.intent"
+    method: str  # e.g. "negotiate.yield", "claim.task", "share.intent"
     params: dict[str, Any]
     bytes_size: int = 256
 
@@ -88,7 +88,7 @@ class BFTVote(BaseModel):
 
     voter_id: int
     term: int
-    proposal: str         # e.g. "advance_phase:engage" / "abort" / "rtl"
+    proposal: str  # e.g. "advance_phase:engage" / "abort" / "rtl"
     decision: Literal["yes", "no"]
     bytes_size: int = 64
 
@@ -110,10 +110,10 @@ class WireMessage(BaseModel):
     """The single envelope dropped onto the swarm bus."""
 
     t: float
-    src: int                       # drone id; -1 = ground station
-    dst: int | None = None         # None = broadcast
+    src: int  # drone id; -1 = ground station
+    dst: int | None = None  # None = broadcast
     protocol: Protocol
-    topic: str                     # 'swarm/<id>/intent' shape
+    topic: str  # 'swarm/<id>/intent' shape
     payload: dict[str, Any]
     bytes_size: int
 
@@ -144,6 +144,7 @@ class MessageLog:
 
     def __init__(self, capacity: int = 20000) -> None:
         from collections import deque
+
         self._buffer: deque[WireMessage] = deque(maxlen=capacity)
 
     def append(self, msg: WireMessage) -> None:
