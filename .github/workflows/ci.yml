@@ -27,9 +27,13 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          # uv.lock is gitignored in this repo, so the default `**/uv.lock`
+          # glob matches nothing in a fresh checkout and setup-uv errors out
+          # before the job body runs. Installs come from pyproject.toml anyway.
+          cache-dependency-glob: "pyproject.toml"
       - name: Install dependencies
         run: |
-          uv pip install --system ruff==0.7.4
+          uv pip install --system ruff==0.15.14
       - name: Ruff format check
         run: ruff format --check src tests
       - name: Ruff lint
@@ -46,6 +50,10 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          # uv.lock is gitignored in this repo, so the default `**/uv.lock`
+          # glob matches nothing in a fresh checkout and setup-uv errors out
+          # before the job body runs. Installs come from pyproject.toml anyway.
+          cache-dependency-glob: "pyproject.toml"
       - name: Install dependencies
         run: |
           uv pip install --system -e ".[dev]" || uv pip install --system -e .
@@ -68,6 +76,10 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          # uv.lock is gitignored in this repo, so the default `**/uv.lock`
+          # glob matches nothing in a fresh checkout and setup-uv errors out
+          # before the job body runs. Installs come from pyproject.toml anyway.
+          cache-dependency-glob: "pyproject.toml"
       - name: Install dependencies
         run: |
           uv pip install --system -e .

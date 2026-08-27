@@ -21,7 +21,7 @@ from enum import Enum
 class Chemistry(Enum):
     LIPO_2024 = "lipo_2024"
     LI_ION_2024 = "li_ion_2024"
-    LI_METAL_2026 = "li_metal_2026"      # imported, supply-risk
+    LI_METAL_2026 = "li_metal_2026"  # imported, supply-risk
     SOLID_STATE_2030 = "solid_state_2030"
 
 
@@ -77,8 +77,9 @@ class BatteryModel:
             return float("inf")
         return float(self.usable_wh(temp_c) / avg_power_w * 60.0)
 
-    def ladakh_derate_vs_sealevel(self, sea_level_power_w: float, altitude_power_w: float,
-                                  temp_c: float = -10.0) -> float:
+    def ladakh_derate_vs_sealevel(
+        self, sea_level_power_w: float, altitude_power_w: float, temp_c: float = -10.0
+    ) -> float:
         """Endurance fraction at a Ladakh-style mission vs sea-level baseline.
 
         Combines cold-capacity loss and the higher hover power at altitude.

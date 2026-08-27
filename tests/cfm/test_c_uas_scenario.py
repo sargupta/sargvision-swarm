@@ -82,9 +82,7 @@ def test_layered_strategy_returns_n_goals():
 def test_point_defence_all_at_same_radius():
     scn = _scenario()
     wave = scn.spawn_wave()
-    goals = plan_goals_for_strategy(
-        CUASStrategy.POINT_DEFENCE, scn.assets, wave, n_defenders=8
-    )
+    goals = plan_goals_for_strategy(CUASStrategy.POINT_DEFENCE, scn.assets, wave, n_defenders=8)
     asset_pos = scn.assets[0].position_enu_m
     # all goals should be within tight bubble (~800 m default)
     distances = np.linalg.norm(goals[:, :2] - asset_pos[:2], axis=1)
@@ -94,9 +92,7 @@ def test_point_defence_all_at_same_radius():
 def test_area_defence_spreads_widely():
     scn = _scenario()
     wave = scn.spawn_wave()
-    goals = plan_goals_for_strategy(
-        CUASStrategy.AREA_DEFENCE, scn.assets, wave, n_defenders=12
-    )
+    goals = plan_goals_for_strategy(CUASStrategy.AREA_DEFENCE, scn.assets, wave, n_defenders=12)
     asset_pos = scn.assets[0].position_enu_m
     # area defence should reach intermediate range
     distances = np.linalg.norm(goals[:, :2] - asset_pos[:2], axis=1)

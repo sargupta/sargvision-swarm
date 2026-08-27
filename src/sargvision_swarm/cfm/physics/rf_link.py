@@ -37,7 +37,9 @@ def _absorption_db_per_km(frequency_hz: float) -> float:
     return _ABSORPTION_DB_PER_KM[nearest]
 
 
-def friis_path_loss_db(distance_m: float, frequency_hz: float, *, with_absorption: bool = True) -> float:
+def friis_path_loss_db(
+    distance_m: float, frequency_hz: float, *, with_absorption: bool = True
+) -> float:
     """Free-space path loss in dB (+ optional atmospheric absorption)."""
     if distance_m <= 0:
         return 0.0
@@ -51,14 +53,14 @@ def friis_path_loss_db(distance_m: float, frequency_hz: float, *, with_absorptio
 class LinkBudget:
     """A drone radio link budget."""
 
-    tx_power_dbm: float = 30.0           # 1 W
+    tx_power_dbm: float = 30.0  # 1 W
     tx_gain_dbi: float = 3.0
     rx_gain_dbi: float = 3.0
     frequency_hz: float = 5.8e9
     bandwidth_hz: float = 10e6
-    noise_floor_dbm: float = -100.0      # ~10 MHz thermal + NF
-    spreading_gain_db: float = 20.0      # FHSS/DSSS processing gain
-    snr_threshold_db: float = 6.0        # min usable SNR
+    noise_floor_dbm: float = -100.0  # ~10 MHz thermal + NF
+    spreading_gain_db: float = 20.0  # FHSS/DSSS processing gain
+    snr_threshold_db: float = 6.0  # min usable SNR
 
     def received_power_dbm(self, distance_m: float) -> float:
         fspl = friis_path_loss_db(distance_m, self.frequency_hz)
@@ -121,7 +123,9 @@ def link_snr_db(
     return lb.snr_db(distance_m, jammer_power_dbm)
 
 
-def link_capacity_mbps(snr_db: float, bandwidth_hz: float = 10e6, *, efficiency: float = 0.65) -> float:
+def link_capacity_mbps(
+    snr_db: float, bandwidth_hz: float = 10e6, *, efficiency: float = 0.65
+) -> float:
     """Shannon capacity (Mbps) at the given SNR, scaled by a practical efficiency.
 
     C = B·log2(1 + SNR_linear). Real radios hit ~50-80% of Shannon — default 0.65.

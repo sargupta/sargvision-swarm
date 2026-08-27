@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .report import Modality, SensorReport
+from .report import SensorReport
 
 
 def cross_modal_consistency(
@@ -97,9 +97,7 @@ def fuse_reports(
     Weighted by per-report confidence × attestation trust multiplier.
     Returns None if no consistent cluster.
     """
-    score, agreeing = cross_modal_consistency(
-        reports, position_tolerance_m=position_tolerance_m
-    )
+    score, agreeing = cross_modal_consistency(reports, position_tolerance_m=position_tolerance_m)
     if not agreeing:
         return None
 
@@ -107,9 +105,7 @@ def fuse_reports(
     positions = np.stack(
         [r.target_position_enu_m for r in agreeing if r.target_position_enu_m is not None]
     )
-    weights = np.array(
-        [r.confidence * r.attestation.trust_multiplier for r in agreeing]
-    )
+    weights = np.array([r.confidence * r.attestation.trust_multiplier for r in agreeing])
     if weights.sum() <= 0:
         return None
     weights = weights / weights.sum()

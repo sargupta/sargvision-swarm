@@ -90,9 +90,7 @@ def fuse_pnt(
         # resistant to a single spoofer EVEN IF it claims a tiny sigma (an
         # inverse-variance mean would be pulled toward such a spoofer and let it
         # escape — the bug this guards against).
-        P_all = np.stack(
-            [np.asarray(s.position_enu_m, dtype=np.float64).reshape(3) for s in avail]
-        )
+        P_all = np.stack([np.asarray(s.position_enu_m, dtype=np.float64).reshape(3) for s in avail])
         robust_consensus = np.median(P_all, axis=0)
         median_sigma = float(np.median([s.sigma_m for s in avail]))
         survivors = []

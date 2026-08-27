@@ -22,16 +22,16 @@ from .attestation import (
     imu_triple_redundancy_check,
 )
 from .ewstate import EWState
-from .report import Modality, SensorReport
 from .fusion import cross_modal_consistency, fuse_reports
+from .report import Modality, SensorReport
 
 __all__ = [
     "AttestationFlags",
-    "generate_attestation",
-    "imu_triple_redundancy_check",
     "EWState",
     "Modality",
     "SensorReport",
     "cross_modal_consistency",
     "fuse_reports",
+    "generate_attestation",
+    "imu_triple_redundancy_check",
 ]
