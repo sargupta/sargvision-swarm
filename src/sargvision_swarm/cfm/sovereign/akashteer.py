@@ -19,17 +19,17 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Literal
+from typing import Literal
 
 import numpy as np
-
 
 #: Priority levels emitted by Akashteer for cued tracks.
 CuePriority = Literal[
     "P0_emergency",  # incoming, < 30 s to engagement window close
-    "P1_high",       # high-priority engagement, < 2 min
-    "P2_normal",     # normal cue
+    "P1_high",  # high-priority engagement, < 2 min
+    "P2_normal",  # normal cue
     "P3_observation",  # observe-only, no engagement authority
 ]
 

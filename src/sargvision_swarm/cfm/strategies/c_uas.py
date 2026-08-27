@@ -14,7 +14,6 @@ import numpy as np
 from ..scenarios.c_uas_defence import (
     CriticalInfrastructureAsset,
     HostileWave,
-    ThreatClass,
 )
 
 
@@ -87,9 +86,7 @@ def point_defence_goals(
     goals: list[np.ndarray] = []
     for i in range(n_defenders):
         az_rad = 2.0 * np.pi * (i + 0.5) / max(n_defenders, 1)
-        offset = np.array(
-            [np.cos(az_rad) * bubble_radius_m, np.sin(az_rad) * bubble_radius_m, 0.0]
-        )
+        offset = np.array([np.cos(az_rad) * bubble_radius_m, np.sin(az_rad) * bubble_radius_m, 0.0])
         goal = asset.position_enu_m + offset
         goal[2] = altitude
         goals.append(goal)
@@ -149,9 +146,7 @@ def mobile_cap_goals(
     goals: list[np.ndarray] = []
     for i in range(n_defenders):
         az_rad = 2.0 * np.pi * (i / max(n_defenders, 1)) + orbit_phase_offset_rad
-        offset = np.array(
-            [np.cos(az_rad) * orbit_radius_m, np.sin(az_rad) * orbit_radius_m, 0.0]
-        )
+        offset = np.array([np.cos(az_rad) * orbit_radius_m, np.sin(az_rad) * orbit_radius_m, 0.0])
         goal = asset.position_enu_m + offset
         goal[2] = altitude
         goals.append(goal)

@@ -97,9 +97,7 @@ class CriticalInfrastructureAsset:
     """
 
     asset_id: str = "CIA-01"
-    position_enu_m: np.ndarray = field(
-        default_factory=lambda: np.array([0.0, 0.0, 50.0])
-    )
+    position_enu_m: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0, 50.0]))
     value_usd: float = 10_000_000.0  # default $10M asset
     radius_m: float = 500.0
 
@@ -130,7 +128,7 @@ class HostileWave:
 
     @property
     def by_class(self) -> dict[ThreatClass, int]:
-        counts: dict[ThreatClass, int] = {tc: 0 for tc in ThreatClass}
+        counts: dict[ThreatClass, int] = dict.fromkeys(ThreatClass, 0)
         for h in self.hostiles:
             if h.alive:
                 counts[h.threat_class] += 1
@@ -169,9 +167,7 @@ class CUASDefenceScenario:
             az_deg = rng.uniform(az_lo, az_hi)
             az_rad = np.deg2rad(az_deg)
             # spawn at start_range_m from the target asset
-            offset = p.start_range_m * np.array(
-                [np.cos(az_rad), np.sin(az_rad), 0.0]
-            )
+            offset = p.start_range_m * np.array([np.cos(az_rad), np.sin(az_rad), 0.0])
             pos = target.position_enu_m + offset
             # vary altitude by class
             if tc is ThreatClass.FPV:
@@ -234,9 +230,7 @@ class CUASDefenceScenario:
             "by_class": {tc.value: n for tc, n in wave.by_class.items()},
         }
 
-    def cost_exchange_ratio(
-        self, wave: HostileWave, interceptor_cost_usd_per_kill: float
-    ) -> float:
+    def cost_exchange_ratio(self, wave: HostileWave, interceptor_cost_usd_per_kill: float) -> float:
         """Compute defender-favourable cost-exchange ratio.
 
         Returns hostile-cost-killed / interceptor-cost-expended. Higher is
@@ -245,9 +239,7 @@ class CUASDefenceScenario:
         killed_cost = sum(
             h.cost_usd for h in wave.hostiles if not h.alive and h.impacted_asset is None
         )
-        kills = sum(
-            1 for h in wave.hostiles if not h.alive and h.impacted_asset is None
-        )
+        kills = sum(1 for h in wave.hostiles if not h.alive and h.impacted_asset is None)
         if kills == 0:
             return 0.0
         expended = kills * interceptor_cost_usd_per_kill

@@ -22,8 +22,8 @@ from .c_uas_defence import (
 )
 
 __all__ = [
-    "CriticalInfrastructureAsset",
     "CUASDefenceScenario",
+    "CriticalInfrastructureAsset",
     "HostileWave",
     "HostileWaveParams",
     "ThreatClass",

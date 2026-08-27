@@ -32,9 +32,7 @@ def test_dem_tile_returns_elevation_array():
 
 def test_satellite_tile_returns_rgb():
     svc = BhuvanTileService()
-    req = TileRequest(
-        lat_min=12.9, lat_max=13.0, lon_min=77.5, lon_max=77.6, layer="satellite"
-    )
+    req = TileRequest(lat_min=12.9, lat_max=13.0, lon_min=77.5, lon_max=77.6, layer="satellite")
     resp = svc.fetch(req)
     assert resp.data.ndim == 3
     assert resp.data.shape[-1] == 3
@@ -43,9 +41,7 @@ def test_satellite_tile_returns_rgb():
 
 def test_landuse_tile_returns_class_labels():
     svc = BhuvanTileService()
-    req = TileRequest(
-        lat_min=22.0, lat_max=22.05, lon_min=88.3, lon_max=88.35, layer="landuse"
-    )
+    req = TileRequest(lat_min=22.0, lat_max=22.05, lon_min=88.3, lon_max=88.35, layer="landuse")
     resp = svc.fetch(req)
     assert resp.data.ndim == 2
     assert resp.data.dtype == np.int16

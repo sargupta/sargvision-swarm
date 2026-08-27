@@ -20,7 +20,6 @@ from sargvision_swarm.cfm.physics.rf_link import (
     link_snr_db,
 )
 
-
 # ── RF link (vs file 49) ────────────────────────────────────────────────────
 
 
@@ -45,7 +44,7 @@ def test_60ghz_absorption_kills_range():
 
 def test_link_connected_near_denied_far():
     lb = LinkBudget(tx_power_dbm=30.0, frequency_hz=2.4e9)
-    assert lb.is_connected(1000.0)        # 1 km: connected
+    assert lb.is_connected(1000.0)  # 1 km: connected
     assert not lb.is_connected(500_000.0)  # 500 km: not
 
 
@@ -94,8 +93,8 @@ def test_hover_power_increases_with_altitude():
 
 
 def test_wind_tolerance_rule():
-    assert wind_tolerated(30.0, 9.0)        # 9 m/s < 1/3 of 30
-    assert not wind_tolerated(30.0, 15.0)   # 15 m/s > 1/3 of 30
+    assert wind_tolerated(30.0, 9.0)  # 9 m/s < 1/3 of 30
+    assert not wind_tolerated(30.0, 15.0)  # 15 m/s > 1/3 of 30
 
 
 # ── Battery (vs files 47/90) ────────────────────────────────────────────────
@@ -137,7 +136,9 @@ def test_ladakh_compound_derate_about_two_thirds():
 
 
 def _src(name, pos, sigma, available=True):
-    return PNTSource(name=name, position_enu_m=np.array(pos, dtype=float), sigma_m=sigma, available=available)
+    return PNTSource(
+        name=name, position_enu_m=np.array(pos, dtype=float), sigma_m=sigma, available=available
+    )
 
 
 def test_fusion_inverse_variance_weights_precise_source():

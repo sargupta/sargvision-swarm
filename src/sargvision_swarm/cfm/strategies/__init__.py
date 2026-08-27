@@ -29,8 +29,8 @@ from .c_uas import (
     area_defence_goals,
     layered_defence_goals,
     mobile_cap_goals,
-    point_defence_goals,
     plan_goals_for_strategy,
+    point_defence_goals,
 )
 
 __all__ = [
@@ -38,6 +38,6 @@ __all__ = [
     "area_defence_goals",
     "layered_defence_goals",
     "mobile_cap_goals",
-    "point_defence_goals",
     "plan_goals_for_strategy",
+    "point_defence_goals",
 ]

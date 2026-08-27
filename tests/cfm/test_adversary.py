@@ -14,7 +14,6 @@ from sargvision_swarm.cfm.adversary import (
 )
 from sargvision_swarm.cfm.sensors.report import Modality
 
-
 # ── Friis jammer tests ─────────────────────────────────────────────────────
 
 

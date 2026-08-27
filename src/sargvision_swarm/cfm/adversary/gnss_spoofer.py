@@ -53,8 +53,7 @@ class GNSSSpoofer:
 
     def in_range(self, victim_position_enu_m: np.ndarray) -> bool:
         return (
-            float(np.linalg.norm(victim_position_enu_m - self.centre_enu_m))
-            <= self.spoof_radius_m
+            float(np.linalg.norm(victim_position_enu_m - self.centre_enu_m)) <= self.spoof_radius_m
         )
 
     def apply(

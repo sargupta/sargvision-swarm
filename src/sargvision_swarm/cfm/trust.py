@@ -42,11 +42,11 @@ class TrustResult:
     """Output of the combined trust pipeline."""
 
     node_ids: list[str]
-    graph_trust: np.ndarray          # (N,) TWSL residual-based loyalty in (0,1]
-    attestation_mult: np.ndarray     # (N,) hardware-attestation multiplier in [0,1]
-    loyalty_trust: np.ndarray        # (N,) graph_trust × attestation_mult
-    confidence: np.ndarray           # (N,) EWState fusion-confidence in (0,1]
-    killed: np.ndarray               # (N,) bool — excluded by kill-switch
+    graph_trust: np.ndarray  # (N,) TWSL residual-based loyalty in (0,1]
+    attestation_mult: np.ndarray  # (N,) hardware-attestation multiplier in [0,1]
+    loyalty_trust: np.ndarray  # (N,) graph_trust × attestation_mult
+    confidence: np.ndarray  # (N,) EWState fusion-confidence in (0,1]
+    killed: np.ndarray  # (N,) bool — excluded by kill-switch
 
     def excluded_ids(self) -> list[str]:
         return [nid for nid, k in zip(self.node_ids, self.killed) if k]

@@ -22,20 +22,21 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Literal
+from typing import Literal
 
 import numpy as np
 
 #: Standard IACCS track message types.
 MessageType = Literal[
-    "track_update",         # external sensor track (radar/IRST/EO)
-    "track_drop",           # external track lost
-    "airspace_corridor",    # friendly aircraft corridor declaration
-    "no_fly_zone",          # NFZ activation (civilian airliner, friendly base)
-    "engagement_handoff",   # CFM declares it will engage a track
-    "engagement_release",   # CFM hands target back to wider AD
-    "heartbeat",            # peer liveness
+    "track_update",  # external sensor track (radar/IRST/EO)
+    "track_drop",  # external track lost
+    "airspace_corridor",  # friendly aircraft corridor declaration
+    "no_fly_zone",  # NFZ activation (civilian airliner, friendly base)
+    "engagement_handoff",  # CFM declares it will engage a track
+    "engagement_release",  # CFM hands target back to wider AD
+    "heartbeat",  # peer liveness
 ]
 
 TrackKind = Literal["aircraft", "missile", "drone", "unknown"]

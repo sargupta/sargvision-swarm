@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import numpy as np
 
-_RHO0 = 1.225      # kg/m³ sea-level ISA density
-_T0 = 288.15       # K sea-level ISA temperature
-_G = 9.80665       # m/s²
+_RHO0 = 1.225  # kg/m³ sea-level ISA density
+_T0 = 288.15  # K sea-level ISA temperature
+_G = 9.80665  # m/s²
 
 
 def isa_density(altitude_m: float, temp_offset_c: float = 0.0) -> float:
