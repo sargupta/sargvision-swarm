@@ -345,10 +345,19 @@ class GovernedMigrationField:
             return drone_pos
         y = float(drone_pos[1])
         target_y = target.center[1]
+        # Route via a corridor only while the drone is still SHORT OF that
+        # corridor. The gate used to compare against the destination's y, but a
+        # drone sitting inside the corridor is also short of the destination --
+        # so it re-targeted a corridor on every tick and no drone ever arrived.
+        # Once through the corridor, run for the destination itself.
         if target_zone_id == "END" and y < target_y - 4:
             corridor = self.pick_corridor(drone_id, drone_pos)
-            return np.array(corridor.center)
+            if y < corridor.center[1] - 4:
+                return np.array(corridor.center)
+            return np.array(target.center)
         if target_zone_id == "START" and y > target_y + 4:
             corridor = self.pick_corridor(drone_id, drone_pos)
-            return np.array(corridor.center)
+            if y > corridor.center[1] + 4:
+                return np.array(corridor.center)
+            return np.array(target.center)
         return np.array(target.center)

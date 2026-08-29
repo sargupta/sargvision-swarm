@@ -63,7 +63,12 @@ DEFAULT_PHASES: list[Phase] = [
     Phase("AUCTION", "YAJNA · ED-CBBA assigning interceptors · VAJRA load-balancing", 12.0, "warn"),
     Phase("ROE AUTHORISE", "SABHA · BFT vote 7/7 · ENGAGE authorised", 8.0, "warn"),
     Phase("ENGAGEMENT", "VAJRA · kinetic intercept in progress · HVTs holding", 28.0, "hostile"),
-    Phase("POSTMORTEM", "MISSION COMPLETE · HVTs PROTECTED · ₹- cr saved", 10.0, "ok"),
+    Phase(
+        "POSTMORTEM",
+        "MISSION COMPLETE · all assets protected · decoys skipped, interceptors conserved",
+        10.0,
+        "ok",
+    ),
 ]
 
 
