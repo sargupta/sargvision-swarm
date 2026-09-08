@@ -126,6 +126,11 @@ class TickResult:
     event_log_lines: list[str] = field(default_factory=list)
 
 
+#: Posterior confidence required before an interceptor is withheld from a
+#: contact assessed as a decoy.
+DECOY_WITHHOLD_MIN_P = 0.80
+
+
 class LiveSession:
     """One swarm scenario as a step-able generator."""
 
@@ -377,6 +382,7 @@ class LiveSession:
         self.spoofed_ids: set[int] = set()
         # Recent SHIELD events surfaced to event log.
         self.shield_decoy_skipped: int = 0
+        self._decoy_withheld: set[int] = set()
         self.shield_kill_switched: set[int] = set()
 
         # VAJRA state + params (Voronoi hysteresis, tropical attention, fragmentation).
@@ -829,12 +835,42 @@ class LiveSession:
                     f"trust={self.shield_state.trust[fid]:.2f}"
                 )
 
-            # Count decoys SHIELD chose NOT to engage despite being TERMINAL.
+            # Withhold interceptors from contacts confidently assessed as
+            # decoys, and count what was withheld.
+            #
+            # Two defects were fixed here. The expected-damage bid merely
+            # DEPRIORITISED a decoy rather than inhibiting it, so with
+            # interceptors spare a decoy at posterior 1.000 was engaged anyway.
+            # And the counter only looked at contacts whose intent had reached
+            # TERMINAL, which the unassigned decoys never do -- so it read zero
+            # while the map showed the opposite. The console advertised a cost
+            # saving its own recording disproved.
+            #
+            # Withholding is gated on CONFIDENCE, not on argmax, and a reserve is
+            # always retained: a classifier that can empty the magazine is a
+            # classifier an adversary can aim at the magazine. The threshold is
+            # deliberately high -- withholding from a misclassified munition
+            # costs the asset, engaging a decoy costs one interceptor, and the
+            # asymmetry runs one way.
+            reserve = max(1, len(self.swarm.drones) // 8)
+            engaged = sum(
+                1 for h in self.hostile_fleet.hostiles if h.alive and h.assigned_to is not None
+            )
             for h in self.hostile_fleet.hostiles:
-                if not h.alive or h.intent_label != "TERMINAL" or h.assigned_to is not None:
+                if not h.alive:
                     continue
                 post = self.shield_state.posteriors.get(h.id)
-                if post is not None and threat_class(post) == "decoy":
+                if post is None or threat_class(post) != "decoy":
+                    continue
+                if float(post[0]) < DECOY_WITHHOLD_MIN_P:
+                    continue
+                if h.assigned_to is not None:
+                    if engaged > reserve:
+                        h.assigned_to = None
+                        engaged -= 1
+                        self.shield_decoy_skipped += 1
+                elif h.id not in self._decoy_withheld:
+                    self._decoy_withheld.add(h.id)
                     self.shield_decoy_skipped += 1
 
             # ── MAYA strategic posture refresh (every ~30 s) ──
