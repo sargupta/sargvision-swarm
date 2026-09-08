@@ -25,13 +25,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
+#: Default loyalty-trust threshold below which the kill-switch fires.
+from sargvision_swarm.thresholds import DEFAULT_KILL_THRESHOLD
+
 from ..core.twsl import twsl_self_consistent_iteration
 from .sensors.attestation import AttestationFlags
 from .sensors.ewstate import EWState
 from .sensors.report import SensorReport
-
-#: Default loyalty-trust threshold below which the kill-switch fires.
-DEFAULT_KILL_THRESHOLD = 0.35
 
 #: Trust ceiling for a node that has NOT passed attestation-on-join.
 UNATTESTED_JOIN_FLOOR = 0.2

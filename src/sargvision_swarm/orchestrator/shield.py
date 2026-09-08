@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from sargvision_swarm.cfm.trust import DEFAULT_KILL_THRESHOLD
+from sargvision_swarm.thresholds import DEFAULT_KILL_THRESHOLD
 
 
 @dataclass
@@ -39,7 +39,7 @@ class ShieldParams:
     decoy_damage: float = 0.05
     kinetic_damage: float = 1.0
     nuisance_damage: float = 0.15
-    # Single source of truth: cfm.trust.DEFAULT_KILL_THRESHOLD. These were
+    # Single source of truth: sargvision_swarm.thresholds. These were
     # 0.25 here and 0.35 there -- two subsystems disagreeing about a
     # safety-relevant constant, which a reviewer reads as evidence about the
     # engineering rather than about the number.
