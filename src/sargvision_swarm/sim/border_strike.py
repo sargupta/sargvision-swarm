@@ -2,11 +2,11 @@
 
 Spec (Operation Trishul):
   - Two named High-Value Targets (HVTs) on the map:
-      * LEH AIRBASE   — military, southwest of swarm
-      * KARU POWER ST — energy infra, southeast of swarm
+      * PRIMARY SUBSTATION — energy infra, southwest of swarm
+      * METRO DATA CENTRE — data infra, southeast of swarm
   - Two hostile waves spawned from the north LoC line:
-      * Axis A:  6 Shahed-style hostiles → LEH_AB
-      * Axis B:  4 Shahed-style hostiles → KARU_PS
+      * Axis A:  6 Shahed-style hostiles → ASSET_PS
+      * Axis B:  4 Shahed-style hostiles → ASSET_DC
   - HVT damage is tracked: a hostile within `impact_radius_m` of its assigned
     HVT scores a hit; HVT status flips PROTECTED → UNDER_ATTACK → STRUCK.
   - 90-second scripted phase machine runs alongside, surfaced to the console
@@ -57,7 +57,7 @@ class Phase:
 # 90-second scripted timeline. Each phase auto-advances at sim-time `started_t
 # + duration_s`. Captions are designed to read like a live ATC + AEW narration.
 DEFAULT_PHASES: list[Phase] = [
-    Phase("PEACETIME", "Defensive patrol · 24 ALFA-S over Leh sector", 8.0, "friend"),
+    Phase("STANDBY", "Defensive patrol · 24 Sentinel over defended sector", 8.0, "friend"),
     Phase("DETECTION", "DRISHTI · 6 inbound from N · 4 inbound from E", 12.0, "warn"),
     Phase("CLASSIFICATION", "PRAJNA · classifying RCS / RF / jerk · decoys filtered", 12.0, "warn"),
     Phase("AUCTION", "YAJNA · ED-CBBA assigning interceptors · VAJRA load-balancing", 12.0, "warn"),
@@ -99,27 +99,37 @@ class BorderStrikeField:
 
     @classmethod
     def build_default(cls) -> BorderStrikeField:
-        """Standard Trishul layout: LEH_AB to the SW, KARU_PS to the SE."""
+        """Standard three-asset layout: substation SW, data centre SE, water plant NW.
+
+        These are civilian critical-infrastructure assets by definition, not by
+        post-hoc renaming. The previous layout named real military sites and
+        relied on a string-rewriting script to civilianise the recording -- which
+        rewrote the display names but not the `kind` tags, leaving a water plant
+        tagged `command` and a substation tagged `military`. A half-applied
+        rename reads as concealment, which is judged far more harshly than
+        either honest option. Defined correctly here, nothing downstream needs
+        to rewrite anything.
+        """
         return cls(
             hvts=[
                 HVT(
-                    id="LEH_AB",
-                    name="LEH AIRBASE",
-                    kind="military",
+                    id="ASSET_PS",
+                    name="PRIMARY SUBSTATION",
+                    kind="energy",
                     pos=np.array([-6.0, -14.0, 0.0], dtype=float),
                     impact_radius_m=2.5,
                 ),
                 HVT(
-                    id="KARU_PS",
-                    name="KARU POWER STN",
-                    kind="energy",
+                    id="ASSET_DC",
+                    name="METRO DATA CENTRE",
+                    kind="data",
                     pos=np.array([12.0, -16.0, 0.0], dtype=float),
                     impact_radius_m=2.2,
                 ),
                 HVT(
-                    id="DBO_FWD",
-                    name="DBO FWD POST",
-                    kind="command",
+                    id="ASSET_WP",
+                    name="CITY WATER PLANT",
+                    kind="water",
                     pos=np.array([-18.0, 8.0, 0.0], dtype=float),
                     impact_radius_m=1.8,
                 ),
@@ -276,9 +286,9 @@ def spawn_border_strike_hostiles(
 ) -> None:
     """Spawn two hostile waves with explicit per-hostile HVT assignments.
 
-    Axis A (6 hostiles): LoC north → LEH_AB
-    Axis B (4 hostiles): far east → KARU_PS
-    Axis C (2 hostiles, optional sneak): far west → DBO_FWD
+    Axis A (6 hostiles): from the north → ASSET_PS
+    Axis B (4 hostiles): far east → ASSET_DC
+    Axis C (2 hostiles, optional sneak): far west → ASSET_WP
 
     Uses the existing HostileFleet structure but overrides the spawn loop.
     Each hostile gets a `target_hvt` attribute (added dynamically) so the
@@ -287,32 +297,47 @@ def spawn_border_strike_hostiles(
     rng = random.Random(seed)
     fleet.reset()
 
-    leh = field_.hvt_by_id("LEH_AB")
-    karu = field_.hvt_by_id("KARU_PS")
-    dbo = field_.hvt_by_id("DBO_FWD")
+    substation = field_.hvt_by_id("ASSET_PS")
+    datacentre = field_.hvt_by_id("ASSET_DC")
+    waterplant = field_.hvt_by_id("ASSET_WP")
 
-    # Axis A — 6 hostiles spaced across the LoC line north of Leh.
-    if leh is not None:
+    # Axis A — 6 hostiles spaced across the sector boundary to the north.
+    if substation is not None:
         for i, x_offset in enumerate([-9.0, -5.5, -2.5, 0.5, 4.0, 7.5]):
             spawn = np.array([x_offset, 22.0, 6.0], dtype=float)
             _spawn_at(
-                fleet, spawn, leh.pos, rng=rng, target_id="LEH_AB", callsign=f"AXA-{i + 1:03d}"
+                fleet,
+                spawn,
+                substation.pos,
+                rng=rng,
+                target_id="ASSET_PS",
+                callsign=f"AXA-{i + 1:03d}",
             )
 
     # Axis B — 4 hostiles from the east edge.
-    if karu is not None:
+    if datacentre is not None:
         for i, y_offset in enumerate([-8.0, -12.0, -16.0, -20.0]):
             spawn = np.array([24.0, y_offset, 6.0], dtype=float)
             _spawn_at(
-                fleet, spawn, karu.pos, rng=rng, target_id="KARU_PS", callsign=f"AXB-{i + 1:03d}"
+                fleet,
+                spawn,
+                datacentre.pos,
+                rng=rng,
+                target_id="ASSET_DC",
+                callsign=f"AXB-{i + 1:03d}",
             )
 
-    # Axis C — 2 sneak hostiles from the west, vectored at DBO forward post.
-    if dbo is not None:
+    # Axis C — 2 sneak hostiles from the west, vectored at the water plant.
+    if waterplant is not None:
         for i, y_offset in enumerate([12.0, 4.0]):
             spawn = np.array([-26.0, y_offset, 6.0], dtype=float)
             _spawn_at(
-                fleet, spawn, dbo.pos, rng=rng, target_id="DBO_FWD", callsign=f"AXC-{i + 1:03d}"
+                fleet,
+                spawn,
+                waterplant.pos,
+                rng=rng,
+                target_id="ASSET_WP",
+                callsign=f"AXC-{i + 1:03d}",
             )
 
 

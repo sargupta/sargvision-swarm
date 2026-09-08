@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from sargvision_swarm.cfm.trust import DEFAULT_KILL_THRESHOLD
+
 
 @dataclass
 class ShieldParams:
@@ -37,7 +39,11 @@ class ShieldParams:
     decoy_damage: float = 0.05
     kinetic_damage: float = 1.0
     nuisance_damage: float = 0.15
-    trust_kill_threshold: float = 0.25  # below this, drone is "kill-switched"
+    # Single source of truth: cfm.trust.DEFAULT_KILL_THRESHOLD. These were
+    # 0.25 here and 0.35 there -- two subsystems disagreeing about a
+    # safety-relevant constant, which a reviewer reads as evidence about the
+    # engineering rather than about the number.
+    trust_kill_threshold: float = DEFAULT_KILL_THRESHOLD
 
 
 @dataclass

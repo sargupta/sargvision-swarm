@@ -22,13 +22,14 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import secrets
 from contextlib import asynccontextmanager
 from typing import Any
 
 import msgpack
 import structlog
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from sargvision_swarm.comms.protocols import WireMessage
@@ -688,14 +689,34 @@ async def lifespan(_app: FastAPI):
         await service.stop()
 
 
+#: Shared secret for the mutating endpoints. When unset the bridge is
+#: read-only: scenario, strategy, jam, GNSS and hijack controls all refuse.
+#: Fail-closed is deliberate -- an unauthenticated bridge on a public URL means
+#: anyone can change what a demonstration is showing, mid-demonstration.
+_CONTROL_TOKEN = os.environ.get("SARGVISION_CONTROL_TOKEN", "")
+
+
+def require_control(x_control_token: str = Header(default="")) -> None:
+    """Gate state-changing endpoints behind a shared token."""
+    if not _CONTROL_TOKEN:
+        raise HTTPException(
+            status_code=503,
+            detail="Control endpoints disabled: SARGVISION_CONTROL_TOKEN is not set.",
+        )
+    if not secrets.compare_digest(x_control_token, _CONTROL_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid control token.")
+
+
 app = FastAPI(lifespan=lifespan, title="SARGVISION Swarm Bridge")
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=(
+        # Origins we own, only. The previous regex admitted ANY *.pages.dev and
+        # ANY *.trycloudflare.com, i.e. any origin anyone can register in
+        # seconds -- combined with unauthenticated mutating endpoints, that let
+        # a third party drive a live demonstration.
         r"https?://(localhost|127\.0\.0\.1)(:\d+)?$|"
         r"https://([a-z0-9-]+\.)*sargvision-swarm\.pages\.dev$|"
-        r"https://([a-z0-9-]+\.)*pages\.dev$|"
-        r"https://([a-z0-9-]+\.)*trycloudflare\.com$|"
         r"https://([a-z0-9-]+\.)*sargvision\.com$"
     ),
     allow_methods=["*"],
@@ -718,13 +739,13 @@ def healthz() -> dict:
     return {"ok": True}
 
 
-@app.post("/scenario/{name}")
+@app.post("/scenario/{name}", dependencies=[Depends(require_control)])
 async def set_scenario(name: str, n: int = 24, seed: int = 42) -> dict:
     await service.start(n_drones=n, scenario=name, seed=seed, comm_range_m=18.0, hz=10.0)
     return {"started": name, "n": n, "seed": seed}
 
 
-@app.post("/vyuha/{strategy}")
+@app.post("/vyuha/{strategy}", dependencies=[Depends(require_control)])
 async def set_vyuha_strategy(strategy: str) -> dict:
     """Hot-swap the VYUHA defence strategy mid-scenario.
 
@@ -745,7 +766,7 @@ async def set_vyuha_strategy(strategy: str) -> dict:
     }
 
 
-@app.post("/jam")
+@app.post("/jam", dependencies=[Depends(require_control)])
 async def toggle_jam() -> dict:
     sess = service.session
     if sess is None:
@@ -759,7 +780,7 @@ async def toggle_jam() -> dict:
     return {"ok": True, "jamming": sess.jamming, "range_m": sess.comm.range_m}
 
 
-@app.post("/gnss/toggle")
+@app.post("/gnss/toggle", dependencies=[Depends(require_control)])
 async def toggle_gnss() -> dict:
     sess = service.session
     if sess is None:
@@ -768,7 +789,7 @@ async def toggle_gnss() -> dict:
     return {"ok": True, "gnss_denied": sess.gnss_denied}
 
 
-@app.post("/hijack/toggle")
+@app.post("/hijack/toggle", dependencies=[Depends(require_control)])
 async def toggle_hijack() -> dict:
     """SHIELD demo: inject sensor-spoofed friendlies. PageRank trust collapses,
     sheaf loyalty drops, kill-switch fires below threshold."""
